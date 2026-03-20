@@ -1,0 +1,13 @@
+.env
+.venv/
+.local/
+.ruff_cache/
+__pycache__/
+*.pyc
+*.log
+*.sqlite3
+*.egg-info/
+cookies.local.json
+.DS_Store
+cookies.chrome.json
+test-results/

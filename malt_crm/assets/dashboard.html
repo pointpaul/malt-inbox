@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Malt Inbox</title>
+    <link rel="stylesheet" href="/assets/dashboard.css">
+
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div>
+        <h1>Malt Inbox</h1>
+        <div class="view-toggle" role="tablist" aria-label="Vues">
+          <button id="activeViewButton" type="button" class="view-button active">Actifs</button>
+          <button id="archivedViewButton" type="button" class="view-button">Archivés</button>
+        </div>
+      </div>
+      <div class="topbar-right">
+        <a id="profileChip" class="profile-chip" href="#" target="_blank" rel="noopener noreferrer" hidden>
+          <img id="profileAvatar" alt="Profil Malt">
+          <div class="profile-copy">
+            <span id="profileName" class="profile-name"></span>
+            <span id="profileRole" class="profile-role"></span>
+          </div>
+        </a>
+        <div class="sync-meta">
+          <span id="syncDot" class="sync-dot"></span>
+          <span id="syncLabel">Chargement</span>
+          <button id="syncButton" class="sync-button" type="button">Synchroniser</button>
+        </div>
+      </div>
+    </header>
+
+    <main class="layout">
+      <section class="panel">
+        <div class="list-head">
+          <h2>Conversations</h2>
+          <p id="listSummary">Chargement…</p>
+        </div>
+        <div id="inboxList" class="inbox-list">
+          <div class="empty">Chargement du flux…</div>
+        </div>
+      </section>
+      <aside class="panel detail-panel">
+        <div class="detail-head">
+          <h2 id="detailTitle">Aucune conversation sélectionnée</h2>
+          <p id="detailTime">Choisis une conversation pour lire le fil.</p>
+        </div>
+        <div id="detailBody" class="detail-body">
+          <div class="empty">Clique sur une ligne pour ouvrir la conversation.</div>
+        </div>
+      </aside>
+    </main>
+  </div>
+
+    <script src="/assets/dashboard.js"></script>
+
+</body>
+</html>
