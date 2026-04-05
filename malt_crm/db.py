@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 from collections.abc import Iterable
 from datetime import datetime, timezone
 from pathlib import Path
@@ -16,6 +17,7 @@ from sqlalchemy import (
     Text,
     create_engine,
     delete,
+    func,
     inspect,
     select,
     text,
@@ -47,6 +49,13 @@ class Base(DeclarativeBase):
     """SQLAlchemy declarative base."""
 
 
+class _ReminderUnset:
+    """Sentinel : ne pas modifier reminder_due_at."""
+
+
+REMINDER_UNCHANGED = _ReminderUnset()
+
+
 class ConversationRecord(Base):
     """Persisted conversation."""
 
@@ -74,6 +83,7 @@ class ConversationRecord(Base):
     manual_workflow_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
     manual_next_action: Mapped[str | None] = mapped_column(Text, nullable=True)
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    reminder_due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     messages: Mapped[list[MessageRecord]] = relationship(
         back_populates="conversation",
@@ -124,6 +134,30 @@ class OpportunityRecord(Base):
     ai_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
     ai_last_analyzed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class TimelineEventRecord(Base):
+    """Événement CRM local (relance, message envoyé, changement de statut)."""
+
+    __tablename__ = "timeline_events"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    conversation_id: Mapped[str | None] = mapped_column(
+        String(64),
+        ForeignKey("conversations.id", ondelete="CASCADE"),
+        index=True,
+        nullable=True,
+    )
+    opportunity_id: Mapped[str | None] = mapped_column(
+        String(64),
+        ForeignKey("opportunities.id", ondelete="CASCADE"),
+        index=True,
+        nullable=True,
+    )
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    title: Mapped[str] = mapped_column(String(512), nullable=False)
+    detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class ProfileSnapshotRecord(Base):
@@ -195,6 +229,7 @@ def _ensure_schema_updates(engine: Engine) -> None:
         "manual_workflow_status": "ALTER TABLE conversations ADD COLUMN manual_workflow_status VARCHAR(32)",
         "manual_next_action": "ALTER TABLE conversations ADD COLUMN manual_next_action TEXT",
         "archived_at": "ALTER TABLE conversations ADD COLUMN archived_at DATETIME",
+        "reminder_due_at": "ALTER TABLE conversations ADD COLUMN reminder_due_at DATETIME",
     }
     opportunity_expected_columns = {
         "ai_fit_label": "ALTER TABLE opportunities ADD COLUMN ai_fit_label VARCHAR(32)",
@@ -239,6 +274,30 @@ def _ensure_schema_updates(engine: Engine) -> None:
         ]
         for ddl in profile_missing:
             connection.execute(text(ddl))
+
+        insp = inspect(connection)
+        if "timeline_events" not in insp.get_table_names():
+            connection.execute(
+                text(
+                    """
+                    CREATE TABLE timeline_events (
+                        id VARCHAR(36) NOT NULL PRIMARY KEY,
+                        conversation_id VARCHAR(64) REFERENCES conversations(id) ON DELETE CASCADE,
+                        opportunity_id VARCHAR(64) REFERENCES opportunities(id) ON DELETE CASCADE,
+                        kind VARCHAR(32) NOT NULL,
+                        title VARCHAR(512) NOT NULL,
+                        detail TEXT,
+                        created_at DATETIME NOT NULL
+                    )
+                    """
+                )
+            )
+            connection.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_timeline_conv "
+                    "ON timeline_events (conversation_id)"
+                )
+            )
 
 
 def upsert_conversation(session: Session, conversation: Conversation) -> ConversationRecord:
@@ -345,6 +404,65 @@ def list_conversations(session: Session, limit: int = 50) -> Iterable[Conversati
     return session.scalars(statement).all()
 
 
+def max_budget_by_conversation_ids(session: Session, conversation_ids: list[str]) -> dict[str, float]:
+    """Budget maximum par conversation (opportunités liées)."""
+
+    if not conversation_ids:
+        return {}
+    rows = session.execute(
+        select(OpportunityRecord.conversation_id, func.max(OpportunityRecord.budget))
+        .where(
+            OpportunityRecord.conversation_id.in_(conversation_ids),
+            OpportunityRecord.conversation_id.isnot(None),
+        )
+        .group_by(OpportunityRecord.conversation_id)
+    )
+    return {str(cid): float(mx or 0) for cid, mx in rows if cid}
+
+
+def append_timeline_event(
+    session: Session,
+    *,
+    conversation_id: str | None,
+    opportunity_id: str | None,
+    kind: str,
+    title: str,
+    detail: str | None = None,
+    created_at: datetime | None = None,
+) -> TimelineEventRecord:
+    """Ajoute un événement timeline (commit laissé au appelant si besoin)."""
+
+    when = created_at or datetime.now(tz=timezone.utc)
+    event = TimelineEventRecord(
+        id=str(uuid.uuid4()),
+        conversation_id=conversation_id,
+        opportunity_id=opportunity_id,
+        kind=kind,
+        title=title,
+        detail=detail,
+        created_at=when,
+    )
+    session.add(event)
+    return event
+
+
+def list_timeline_for_conversation(
+    session: Session,
+    conversation_id: str,
+    *,
+    limit: int = 80,
+) -> list[TimelineEventRecord]:
+    """Événements les plus récents d’abord."""
+
+    stmt = (
+        select(TimelineEventRecord)
+        .where(TimelineEventRecord.conversation_id == conversation_id)
+        .order_by(TimelineEventRecord.created_at.desc())
+        .limit(limit)
+    )
+    return list(session.scalars(stmt))
+
+
 def get_conversation(session: Session, conversation_id: str) -> ConversationRecord | None:
     """Return a conversation by id."""
 
@@ -448,6 +566,8 @@ def update_conversation_crm(
     manual_workflow_status: AIWorkflowStatus | str | None = None,
     manual_next_action: str | None = None,
     archived: bool | None = None,
+    reminder_due_at: datetime | None | _ReminderUnset = REMINDER_UNCHANGED,
+    bump_updated_at: bool = False,
 ) -> ConversationRecord | None:
     """Update CRM fields for one conversation."""
 
@@ -488,6 +608,11 @@ def update_conversation_crm(
                 record.manual_workflow_status = None
             if record.manual_next_action == "Archivé hors Malt.":
                 record.manual_next_action = None
+
+    if reminder_due_at is not REMINDER_UNCHANGED:
+        record.reminder_due_at = reminder_due_at
+    if bump_updated_at:
+        record.updated_at = datetime.now(tz=timezone.utc)
 
     session.commit()
     session.refresh(record)

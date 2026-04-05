@@ -26,6 +26,11 @@
         .replaceAll("'", "&#39;");
     }
 
+    function primaryReplyButtonLabel(loading, draftText) {
+      if (loading) return "Génération…";
+      return draftText.trim() ? "Régénérer" : "Générer une réponse";
+    }
+
     function formatInlineMarkdown(value) {
       const escaped = escapeHtml(value);
       return escaped.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
@@ -99,6 +104,62 @@
       return `${diffDays} j`;
     }
 
+    function smartTierRank(tier) {
+      if (!tier || !tier.id) return 3;
+      if (tier.id === "hot") return 0;
+      if (tier.id === "follow_up") return 1;
+      if (tier.id === "waiting_client") return 2;
+      return 3;
+    }
+
+    function feedItemTierRank(item) {
+      if (item.kind === "conversation") {
+        return smartTierRank(item.raw.smart_tier);
+      }
+      const s = item.raw.strength?.score;
+      if (s == null) return 2;
+      if (s >= 8) return 0;
+      if (s >= 5) return 1;
+      return 2;
+    }
+
+    function strengthScoreValue(raw) {
+      const n = raw?.strength?.score;
+      return typeof n === "number" && !Number.isNaN(n) ? n : 0;
+    }
+
+    /** Texte pour l’attribut title (hover) sur le badge score. */
+    function strengthHoverTitle(strength) {
+      if (!strength) return "";
+      const parts = [];
+      if (strength.explanation) {
+        parts.push(strength.explanation);
+      }
+      if (Array.isArray(strength.why) && strength.why.length) {
+        parts.push(strength.why.join(" · "));
+      }
+      return parts.join("\n\n");
+    }
+
+    function renderStrengthInsightBlock(strength, strengthExtraClass = "") {
+      if (!strength) return "";
+      const hover = strengthHoverTitle(strength);
+      const sc = String(strengthExtraClass || "").trim();
+      const strengthClass = sc ? `crm-strength ${sc}` : "crm-strength";
+      const whyList = Array.isArray(strength.why) && strength.why.length
+        ? `<ul class="crm-why">${strength.why.map((line) => `<li>${escapeHtml(line)}</li>`).join("")}</ul>`
+        : "";
+      const actions = Array.isArray(strength.suggested_actions) && strength.suggested_actions.length
+        ? `<div class="crm-suggestions"><span class="crm-suggestions-label">Pistes d’action</span><ul>${strength.suggested_actions.map((line) => `<li>${escapeHtml(line)}</li>`).join("")}</ul></div>`
+        : "";
+      return `
+        <p class="${escapeHtml(strengthClass)}" ${hover ? `title="${escapeHtml(hover)}"` : ""}>${escapeHtml(strength.label)}</p>
+        ${strength.explanation ? `<p class="crm-score-explanation">${escapeHtml(strength.explanation)}</p>` : ""}
+        ${whyList}
+        ${actions}
+      `;
+    }
+
     function fetchJson(url, options) {
       return fetch(url, options).then(async (response) => {
         if (!response.ok) {
@@ -169,40 +230,168 @@
       return `${kind}:${id}`;
     }
 
-    function feedItems() {
-      const conversations = state.conversations
+    const MS_PER_DAY = 86400000;
+
+    function lastActivityMsFromRaw(raw) {
+      const s = raw?.last_message_at || raw?.updated_at;
+      const t = new Date(s).getTime();
+      return Number.isFinite(t) ? t : 0;
+    }
+
+    /** Âge en jours (flottant) depuis last_message_at ou updated_at. */
+    function ageDaysFromItemRaw(raw) {
+      const t = lastActivityMsFromRaw(raw);
+      if (!t) return Infinity;
+      return (Date.now() - t) / MS_PER_DAY;
+    }
+
+    function formatItemAgeLabel(raw) {
+      const ref = new Date(raw?.last_message_at || raw?.updated_at);
+      if (!Number.isFinite(ref.getTime())) return "";
+      const now = new Date();
+      const startRef = new Date(ref.getFullYear(), ref.getMonth(), ref.getDate());
+      const startNow = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      const diffDays = Math.round((startNow - startRef) / MS_PER_DAY);
+      if (diffDays <= 0) return "aujourd'hui";
+      return `il y a ${diffDays} j`;
+    }
+
+    /**
+     * Regroupe conversations + opportunités par score et ancienneté.
+     * @param {Array<{ kind: string, raw: object }>} inboxItems
+     */
+    function getGroupedInboxItems(inboxItems) {
+      const enriched = inboxItems.map((item) => {
+        const ageDays = ageDaysFromItemRaw(item.raw);
+        const score = strengthScoreValue(item.raw);
+        const lastT = lastActivityMsFromRaw(item.raw);
+        return { item, ageDays, score, lastT };
+      });
+      const prioritaire = enriched
+        .filter((x) => x.score >= 7 && x.ageDays <= 7)
+        .sort((a, b) => b.score - a.score)
+        .map((x) => x.item);
+      const recent = enriched
+        .filter((x) => !(x.score >= 7 && x.ageDays <= 7) && x.ageDays <= 7)
+        .sort((a, b) => b.lastT - a.lastT)
+        .map((x) => x.item);
+      const ancien = enriched
+        .filter((x) => x.ageDays > 7)
+        .sort((a, b) => b.lastT - a.lastT)
+        .map((x) => x.item);
+      return { prioritaire, recent, ancien };
+    }
+
+    function buildConversationFeedItems() {
+      return state.conversations
         .filter((conversation) => state.listView === "archived"
           ? Boolean(conversation.archived_at || conversation.status === "closed")
           : !Boolean(conversation.archived_at || conversation.status === "closed"))
         .map((conversation) => ({
-        kind: "conversation",
-        id: conversation.id,
-        updated_at: conversation.updated_at,
-        title: conversation.client_name,
-        summary: summaryForConversation(conversation),
-        status: statusForConversation(conversation),
-        raw: conversation,
-      }));
-      const opportunities = state.opportunities
+          kind: "conversation",
+          id: conversation.id,
+          updated_at: conversation.updated_at,
+          title: conversation.client_name,
+          summary: summaryForConversation(conversation),
+          status: statusForConversation(conversation),
+          raw: conversation,
+        }));
+    }
+
+    function buildOpportunityFeedItems() {
+      return state.opportunities
         .filter((opportunity) => state.listView === "archived"
           ? Boolean(opportunity.archived_at)
           : !Boolean(opportunity.archived_at))
         .map((opportunity) => ({
-        kind: "opportunity",
-        id: opportunity.id,
-        updated_at: opportunity.updated_at,
-        title: opportunity.title,
-        summary: summaryForOpportunity(opportunity),
-        status: statusForOpportunity(opportunity),
-        raw: opportunity,
-      }));
-      return [...conversations, ...opportunities]
-        .sort((left, right) => {
-          const leftRank = left.status.label === "Action requise" ? 0 : 1;
-          const rightRank = right.status.label === "Action requise" ? 0 : 1;
-          if (leftRank !== rightRank) return leftRank - rightRank;
-          return new Date(right.updated_at) - new Date(left.updated_at);
-        });
+          kind: "opportunity",
+          id: opportunity.id,
+          updated_at: opportunity.updated_at,
+          title: opportunity.title,
+          summary: summaryForOpportunity(opportunity),
+          status: statusForOpportunity(opportunity),
+          raw: opportunity,
+        }));
+    }
+
+    function sortMergedFeedItemsFlat(items) {
+      return [...items].sort((left, right) => {
+        const sb = strengthScoreValue(right.raw) - strengthScoreValue(left.raw);
+        if (sb !== 0) return sb;
+        const tr = feedItemTierRank(left) - feedItemTierRank(right);
+        if (tr !== 0) return tr;
+        const leftRank = left.status.label === "Action requise" ? 0 : 1;
+        const rightRank = right.status.label === "Action requise" ? 0 : 1;
+        if (leftRank !== rightRank) return leftRank - rightRank;
+        return new Date(right.updated_at) - new Date(left.updated_at);
+      });
+    }
+
+    function buildMergedFeedItems() {
+      return [...buildConversationFeedItems(), ...buildOpportunityFeedItems()];
+    }
+
+    /** Ordre plat = ordre d’affichage (navigation clavier, sélection par défaut). */
+    function feedItems() {
+      const merged = buildMergedFeedItems();
+      if (state.listView === "archived") {
+        return sortMergedFeedItemsFlat(merged);
+      }
+      const g = getGroupedInboxItems(merged);
+      return [...g.prioritaire, ...g.recent, ...g.ancien];
+    }
+
+    function listRowTierCompact(item) {
+      if (item.kind !== "conversation" || !item.raw.smart_tier) return "";
+      const t = item.raw.smart_tier;
+      const hint = t.hint || t.label || "";
+      return `<span class="row-tier-compact tier-${escapeHtml(t.id)}" title="${escapeHtml(hint)}">${escapeHtml(t.emoji)} ${escapeHtml(t.label)}</span>`;
+    }
+
+    function listRowScoreCompact(raw) {
+      const s = raw?.strength?.score;
+      if (s == null) return "";
+      const hover = strengthHoverTitle(raw.strength);
+      return `<span class="row-score-compact" title="${escapeHtml(hover)}"><span class="row-score-icon" aria-hidden="true">⚡</span>${escapeHtml(s)}/10</span>`;
+    }
+
+    /**
+     * @param {string | null} sectionId — "prioritaire" | "recent" | "ancien" pour la vue active ; null si archivé
+     */
+    function listRowMetaLine(item, sectionId) {
+      const tier = listRowTierCompact(item);
+      const score = listRowScoreCompact(item.raw);
+      const sep1 = tier && score ? `<span class="row-meta-sep" aria-hidden="true">·</span>` : "";
+      const ancienBadge = sectionId === "ancien"
+        ? `<span class="badge stale-thread row-ancien-badge" title="Activité il y a plus de 7 jours — le score seul peut tromper"><span class="stale-warn-icon" aria-hidden="true">⚠️</span> ancien</span>`
+        : "";
+      const sep2 = (tier || score) && ancienBadge ? `<span class="row-meta-sep" aria-hidden="true">·</span>` : "";
+      return `<div class="row-meta-line">${tier}${sep1}${score}${sep2}${ancienBadge}</div>`;
+    }
+
+    function renderFeedRow(item, sectionId) {
+      const active = state.selectedItem
+        && state.selectedItem.kind === item.kind
+        && state.selectedItem.id === item.id;
+      const ageLabel = formatItemAgeLabel(item.raw);
+      const ageSpan = ageLabel
+        ? `<span class="row-age">${escapeHtml(ageLabel)}</span>`
+        : "";
+      return `
+          <article class="row ${active ? "active" : ""}" data-kind="${escapeHtml(item.kind)}" data-id="${escapeHtml(item.id)}">
+            <div class="row-top">
+              <div class="row-main">
+                <p class="client-name">${escapeHtml(item.title)}</p>
+              </div>
+              <div class="row-time-block">
+                <div class="time">${escapeHtml(formatRelative(item.updated_at))}</div>
+                ${ageSpan}
+              </div>
+            </div>
+            <p class="summary">${escapeHtml(item.summary)}</p>
+            ${listRowMetaLine(item, sectionId)}
+          </article>
+        `;
     }
 
     function workflowValueForConversation(conversation) {
@@ -272,33 +461,33 @@
       const items = feedItems();
       document.getElementById("listSummary").textContent = state.listView === "archived"
         ? `${items.length} archivés`
-        : `${items.length} éléments`;
+        : `${items.length} éléments — 🔥 prioritaires · 🕒 récent · 📦 ancien`;
 
       if (!items.length) {
         list.innerHTML = '<div class="empty">Aucun message ou opportunité synchronisé.</div>';
         return;
       }
 
-      list.innerHTML = items.map((item) => {
-        const active = state.selectedItem
-          && state.selectedItem.kind === item.kind
-          && state.selectedItem.id === item.id;
-        return `
-          <article class="row ${active ? "active" : ""}" data-kind="${escapeHtml(item.kind)}" data-id="${escapeHtml(item.id)}">
-            <div class="row-top">
-              <div class="row-main">
-                <p class="client-name">${escapeHtml(item.title)}</p>
-              </div>
-              <div class="time">${escapeHtml(formatRelative(item.updated_at))}</div>
-            </div>
-            <p class="summary">${escapeHtml(item.summary)}</p>
-            <div class="row-actions">
-              <span class="badge ${escapeHtml(item.status.css)}">${escapeHtml(item.status.label)}</span>
-              ${item.kind === "opportunity" && item.raw.ai_fit_score != null ? `<span class="badge fit">Fit ${escapeHtml(Math.round(item.raw.ai_fit_score))}</span>` : ""}
-            </div>
-          </article>
-        `;
-      }).join("");
+      if (state.listView === "archived") {
+        list.innerHTML = items.map((item) => renderFeedRow(item, null)).join("");
+      } else {
+        const g = getGroupedInboxItems(buildMergedFeedItems());
+        const sections = [
+          { id: "prioritaire", title: "🔥 Prioritaires", rows: g.prioritaire, wrapClass: "" },
+          { id: "recent", title: "🕒 Récent", rows: g.recent, wrapClass: "" },
+          { id: "ancien", title: "📦 Ancien", rows: g.ancien, wrapClass: "inbox-section-ancien" },
+        ];
+        const blocks = [];
+        for (const sec of sections) {
+          if (!sec.rows.length) continue;
+          blocks.push(
+            `<section class="inbox-section ${sec.wrapClass}"><h3 class="inbox-section-title">${escapeHtml(sec.title)}</h3>`,
+          );
+          blocks.push(sec.rows.map((item) => renderFeedRow(item, sec.id)).join(""));
+          blocks.push("</section>");
+        }
+        list.innerHTML = blocks.join("");
+      }
 
       list.querySelectorAll(".row").forEach((node) => {
         node.addEventListener("click", () => {
@@ -337,6 +526,7 @@
           };
       const replyDraft = draftState.text || "";
       const showDraft = draftState.visible || draftState.loading || Boolean(replyDraft);
+      const timeline = state.selectedDetail.timeline || [];
 
       document.getElementById("detailTitle").textContent = "Conversation";
       document.getElementById("detailTime").textContent = "Réponse et messages";
@@ -348,24 +538,34 @@
               <h3>${escapeHtml(conversation.client_name)}</h3>
               <p>${escapeHtml(formatDate(conversation.updated_at))}</p>
               <span class="badge ${escapeHtml(status.css)}">${escapeHtml(status.label)}</span>
+              ${conversation.smart_tier
+          ? `<span class="badge tier tier-${escapeHtml(conversation.smart_tier.id)}">${escapeHtml(conversation.smart_tier.emoji)} ${escapeHtml(conversation.smart_tier.label)}</span>`
+          : ""}
             </div>
             <div class="toolbar-actions">
-              <button id="replyAnchorButton" type="button" class="primary-button" ${draftState.loading ? "disabled" : ""}>${draftState.loading ? "Génération..." : "Réponse rapide IA"}</button>
+              <button id="replyAnchorButton" type="button" class="primary-button" ${draftState.loading ? "disabled" : ""}>${escapeHtml(primaryReplyButtonLabel(draftState.loading, replyDraft))}</button>
               <a class="detail-link" href="https://www.malt.fr/messages/${encodeURIComponent(conversation.id)}" target="_blank" rel="noopener noreferrer">Ouvrir Malt</a>
               <button id="archiveInlineButton" type="button" class="danger-button">${conversation.archived_at ? "Désarchiver" : "Archiver"}</button>
-              <div class="more-actions">
-                <button id="moreActionsButton" type="button" class="ghost-button">...</button>
-                <div id="moreActionsMenu" class="more-menu">
-                  <button id="aiRefreshButton" type="button" class="menu-button">Régénérer la réponse IA</button>
-                </div>
-              </div>
             </div>
+          </div>
+          <div class="crm-insight">
+            ${renderStrengthInsightBlock(conversation.strength)}
+            ${conversation.smart_tier && conversation.smart_tier.hint
+        ? `<p class="crm-tier-hint">${escapeHtml(conversation.smart_tier.hint)}</p>`
+        : ""}
+            ${conversation.reminder_due_at
+        ? `<p class="crm-reminder">Rappel : ${escapeHtml(formatDate(conversation.reminder_due_at))}</p>`
+        : ""}
+          </div>
+          <div class="quick-actions">
+            <button id="quickSentOk" type="button" class="ghost-button">Envoyé ✔</button>
+            <button id="quickSnooze3d" type="button" class="ghost-button">Relancer dans 3 jours</button>
           </div>
           ${showDraft ? `
             <div id="draftCard" class="draft">
               <div class="draft-head">
                 <h3>Réponse suggérée</h3>
-                <span class="draft-status">${draftState.loading ? "Génération..." : (replyDraft.trim() ? "Prêt à envoyer" : "Aucune réponse suggérée")}</span>
+                <span class="draft-status">${draftState.loading ? "Génération…" : (replyDraft.trim() ? "Prêt à envoyer" : "Aucune réponse suggérée")}</span>
               </div>
               ${draftState.note ? `<div class="draft-hint">${escapeHtml(draftState.note)}</div>` : ""}
               <textarea id="replyDraftField" ${draftState.loading ? "disabled" : ""} placeholder="La réponse IA apparaîtra ici.">${escapeHtml(replyDraft)}</textarea>
@@ -409,19 +609,43 @@
             `;
           }).join("") : '<div class="empty">Aucun message synchronisé.</div>'}
         </div>
+        <p class="thread-title">Activité CRM</p>
+        <div class="timeline">
+          ${timeline.length
+        ? timeline.map((ev) => `
+            <article class="timeline-event kind-${escapeHtml(ev.kind)}">
+              <div class="timeline-meta">
+                <span class="timeline-title">${escapeHtml(ev.title)}</span>
+                <span class="timeline-when">${escapeHtml(formatDate(ev.created_at))}</span>
+              </div>
+              ${ev.detail ? `<p class="timeline-detail">${escapeHtml(ev.detail)}</p>` : ""}
+            </article>
+          `).join("")
+        : '<div class="empty">Historique vide — utilise les boutons ci-dessus ou change le statut.</div>'}
+        </div>
       `;
 
       body.scrollTop = 0;
 
-      const moreButton = document.getElementById("moreActionsButton");
-      const moreMenu = document.getElementById("moreActionsMenu");
-      moreButton.addEventListener("click", (event) => {
-        event.stopPropagation();
-        moreMenu.classList.toggle("open");
+      document.getElementById("quickSentOk").addEventListener("click", async () => {
+        try {
+          const updated = await postConversationQuickAction(conversation.id, "message_sent");
+          mergeConversation(updated);
+          await selectItem("conversation", conversation.id);
+        } catch (error) {
+          alert(error.message);
+        }
       });
-      document.addEventListener("click", () => {
-        moreMenu.classList.remove("open");
-      }, { once: true });
+
+      document.getElementById("quickSnooze3d").addEventListener("click", async () => {
+        try {
+          const updated = await postConversationQuickAction(conversation.id, "snooze_3d");
+          mergeConversation(updated);
+          await selectItem("conversation", conversation.id);
+        } catch (error) {
+          alert(error.message);
+        }
+      });
 
       document.getElementById("archiveInlineButton").addEventListener("click", async () => {
         try {
@@ -430,7 +654,7 @@
           });
           mergeConversation(updated);
           state.selectedDetail.conversation = updated;
-          render();
+          await selectItem("conversation", conversation.id);
         } catch (error) {
           alert(error.message);
         }
@@ -447,17 +671,10 @@
         try {
           const updated = await updateConversationCRM(conversation.id, payload);
           mergeConversation(updated);
-          state.selectedDetail.conversation = updated;
-          render();
+          await selectItem("conversation", conversation.id);
         } catch (error) {
           alert(error.message);
         }
-      });
-
-      document.getElementById("aiRefreshButton").addEventListener("click", () => {
-        generateReplyDraft("conversation", conversation.id).catch((error) => {
-          alert(error.message);
-        });
       });
 
       document.getElementById("replyAnchorButton").addEventListener("click", () => {
@@ -552,6 +769,7 @@
       document.getElementById("detailTime").textContent = "Réponse et contexte";
       const fitScore = opportunity.ai_fit_score != null ? Math.round(opportunity.ai_fit_score) : null;
       const fitLabel = opportunity.ai_fit_label ? opportunity.ai_fit_label.replaceAll("_", " ") : null;
+      const strengthBlock = renderStrengthInsightBlock(opportunity.strength, "opp");
 
       body.innerHTML = `
         <div class="detail-toolbar">
@@ -560,19 +778,20 @@
               <h3>${escapeHtml(opportunity.title)}</h3>
               <p>${escapeHtml(formatDate(opportunity.updated_at))}</p>
               <span class="badge ${escapeHtml(status.css)}">${escapeHtml(status.label)}</span>
-              ${fitScore != null ? `<span class="badge fit">Fit ${escapeHtml(fitScore)}${fitLabel ? ` · ${escapeHtml(fitLabel)}` : ""}</span>` : ""}
+              ${fitScore != null ? `<span class="badge fit" title="Adéquation IA (voir détail score ci-dessous)">Fit ${escapeHtml(fitScore)}${fitLabel ? ` · ${escapeHtml(fitLabel)}` : ""}</span>` : ""}
             </div>
             <div class="toolbar-actions">
-              <button id="replyAnchorButton" type="button" class="primary-button" ${draftState.loading ? "disabled" : ""}>${draftState.loading ? "Génération..." : "Réponse rapide IA"}</button>
+              <button id="replyAnchorButton" type="button" class="primary-button" ${draftState.loading ? "disabled" : ""}>${escapeHtml(primaryReplyButtonLabel(draftState.loading, replyDraft))}</button>
               <a class="detail-link" href="https://www.malt.fr/messages/client-project-offer/${encodeURIComponent(opportunity.id)}" target="_blank" rel="noopener noreferrer">Ouvrir Malt</a>
               <button id="archiveOpportunityButton" type="button" class="danger-button">${opportunity.archived_at ? "Désarchiver" : "Archiver"}</button>
             </div>
           </div>
+          <div class="crm-insight">${strengthBlock}</div>
           ${showDraft ? `
             <div id="draftCard" class="draft">
               <div class="draft-head">
                 <h3>Réponse suggérée</h3>
-                <span class="draft-status">${draftState.loading ? "Génération..." : (replyDraft.trim() ? "Prêt à envoyer" : "Aucune réponse suggérée")}</span>
+                <span class="draft-status">${draftState.loading ? "Génération…" : (replyDraft.trim() ? "Prêt à envoyer" : "Aucune réponse suggérée")}</span>
               </div>
               ${draftState.note ? `<div class="draft-hint">${escapeHtml(draftState.note)}</div>` : ""}
               <textarea id="replyDraftField" ${draftState.loading ? "disabled" : ""} placeholder="La réponse IA apparaîtra ici.">${escapeHtml(replyDraft)}</textarea>
@@ -701,6 +920,14 @@
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
+      });
+    }
+
+    function postConversationQuickAction(conversationId, action) {
+      return fetchJson(`/api/conversations/${encodeURIComponent(conversationId)}/actions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action }),
       });
     }
 

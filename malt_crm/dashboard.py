@@ -37,6 +37,8 @@ from .db import (
     ConversationRecord,
     MessageRecord,
     OpportunityRecord,
+    TimelineEventRecord,
+    append_timeline_event,
     create_session_factory,
     get_conversation,
     get_opportunity,
@@ -45,6 +47,8 @@ from .db import (
     list_messages_for_conversation,
     list_opportunities,
     list_opportunities_for_conversation,
+    list_timeline_for_conversation,
+    max_budget_by_conversation_ids,
     update_conversation_ai,
     update_conversation_crm,
     update_opportunity_ai,
@@ -53,6 +57,7 @@ from .db import (
 from .dirs import malt_local_dir
 from .env import load_project_env, upsert_env_value
 from .models import AIWorkflowStatus
+from .scoring import conversation_smart_tier, conversation_strength, opportunity_strength
 from .sync import MaltSyncService, SyncReport
 
 LOGGER = logging.getLogger(__name__)
@@ -178,26 +183,60 @@ def _follow_up_reply(record: ConversationRecord) -> str:
     )
 
 
+def _serialize_timeline_event(record: TimelineEventRecord) -> dict[str, Any]:
+    return {
+        "id": record.id,
+        "kind": record.kind,
+        "title": record.title,
+        "detail": record.detail,
+        "created_at": record.created_at.isoformat(),
+    }
+
+
 def _serialize_conversation(
     record: ConversationRecord,
     *,
     message_count: int = 0,
     opportunity_count: int = 0,
+    max_linked_budget: float | None = None,
 ) -> dict[str, Any]:
     follow_up_due = _follow_up_due(record)
     reply_draft = record.ai_reply_draft
     if follow_up_due and not reply_draft:
         reply_draft = _follow_up_reply(record)
+    eff_wf = _effective_workflow_status(record)
+    budget = float(max_linked_budget or 0) or None
+    tier = conversation_smart_tier(
+        effective_workflow=eff_wf,
+        ai_urgency=record.ai_urgency,
+        ai_category=record.ai_category,
+        ai_needs_reply=record.ai_needs_reply,
+        priority=record.priority,
+        follow_up_due=follow_up_due,
+        max_linked_budget=budget,
+    )
+    strength = conversation_strength(
+        effective_workflow=eff_wf,
+        ai_urgency=record.ai_urgency,
+        ai_category=record.ai_category,
+        ai_needs_reply=record.ai_needs_reply,
+        ai_confidence=record.ai_confidence,
+        max_linked_budget=budget,
+        message_count=message_count,
+        follow_up_due=follow_up_due,
+    )
     return {
         "id": record.id,
         "client_name": record.client_name,
         "last_message": record.last_message,
         "updated_at": record.updated_at.isoformat(),
+        # Dernière activité connue sur le fil (aligné sur updated_at tant que le sync Malt ne fournit pas l’heure exacte du dernier message).
+        "last_message_at": record.updated_at.isoformat(),
         "status": record.status,
         "priority": record.priority,
         "message_count": message_count,
         "opportunity_count": opportunity_count,
-        "workflow_status": _effective_workflow_status(record),
+        "workflow_status": eff_wf,
         "next_action": _effective_next_action(record),
         "follow_up_due": follow_up_due,
         "ai_category": record.ai_category,
@@ -211,11 +250,16 @@ def _serialize_conversation(
         "manual_workflow_status": record.manual_workflow_status,
         "manual_next_action": record.manual_next_action,
         "archived_at": record.archived_at.isoformat() if record.archived_at else None,
+        "reminder_due_at": (
+            record.reminder_due_at.isoformat() if record.reminder_due_at else None
+        ),
         "ai_last_analyzed_at": (
             record.ai_last_analyzed_at.isoformat()
             if record.ai_last_analyzed_at
             else None
         ),
+        "smart_tier": tier,
+        "strength": strength,
     }
 
 
@@ -230,6 +274,7 @@ def _serialize_message(record: MessageRecord) -> dict[str, Any]:
 
 
 def _serialize_opportunity(record: OpportunityRecord) -> dict[str, Any]:
+    strength = opportunity_strength(record)
     return {
         "id": record.id,
         "conversation_id": record.conversation_id,
@@ -251,6 +296,7 @@ def _serialize_opportunity(record: OpportunityRecord) -> dict[str, Any]:
             if record.ai_last_analyzed_at
             else None
         ),
+        "strength": strength,
     }
 
 
@@ -675,6 +721,20 @@ class DashboardApp:
                 return JSONResponse({"error": "Conversation not found"}, status_code=404)
             return updated
 
+        @app.post("/api/conversations/{conversation_id}/actions", response_model=None)
+        def _api_conv_actions(
+            conversation_id: str,
+            payload: dict[str, Any] = Body(...),
+        ) -> JSONResponse | dict[str, Any]:
+            action = str(payload.get("action", "")).strip()
+            try:
+                updated = d._conversation_quick_action(conversation_id, action)
+            except ValueError as exc:
+                return JSONResponse({"error": str(exc)}, status_code=400)
+            if updated is None:
+                return JSONResponse({"error": "Conversation not found"}, status_code=404)
+            return updated
+
         @app.get("/api/conversations/{conversation_id}", response_model=None)
         def _api_conversation_detail(conversation_id: str) -> JSONResponse | dict[str, Any]:
             payload = d._load_conversation_detail(conversation_id)
@@ -751,6 +811,7 @@ class DashboardApp:
             conversation_ids = [item.id for item in items]
             message_counts: dict[str, int] = {}
             opportunity_counts: dict[str, int] = {}
+            budget_by_conv: dict[str, float] = {}
 
             if conversation_ids:
                 message_counts = {
@@ -770,12 +831,14 @@ class DashboardApp:
                     )
                     if conversation_id
                 }
+                budget_by_conv = max_budget_by_conversation_ids(session, conversation_ids)
 
         rows = [
             _serialize_conversation(
                 item,
                 message_count=message_counts.get(item.id, 0),
                 opportunity_count=opportunity_counts.get(item.id, 0),
+                max_linked_budget=budget_by_conv.get(item.id),
             )
             for item in items
         ]
@@ -795,15 +858,21 @@ class DashboardApp:
 
             messages = list(list_messages_for_conversation(session, conversation_id))
             opportunities = list(list_opportunities_for_conversation(session, conversation_id))
+            budget_map = max_budget_by_conversation_ids(session, [conversation_id])
+            timeline = list_timeline_for_conversation(session, conversation_id)
 
-        return {
-            "conversation": _serialize_conversation(
+            conv_payload = _serialize_conversation(
                 conversation,
                 message_count=len(messages),
                 opportunity_count=len(opportunities),
-            ),
+                max_linked_budget=budget_map.get(conversation_id),
+            )
+
+        return {
+            "conversation": conv_payload,
             "messages": [_serialize_message(item) for item in messages],
             "opportunities": [_serialize_opportunity(item) for item in opportunities],
+            "timeline": [_serialize_timeline_event(ev) for ev in timeline],
         }
 
     def _load_messages(self, conversation_id: str) -> list[dict[str, Any]]:
@@ -827,14 +896,32 @@ class DashboardApp:
                 if opportunity.conversation_id
                 else None
             )
+            conv_payload = None
+            if linked_conversation is not None:
+                cid = linked_conversation.id
+                mb = max_budget_by_conversation_ids(session, [cid]).get(cid)
+                mc = int(
+                    session.scalar(
+                        select(func.count()).where(MessageRecord.conversation_id == cid)
+                    )
+                    or 0
+                )
+                oc = int(
+                    session.scalar(
+                        select(func.count()).where(OpportunityRecord.conversation_id == cid)
+                    )
+                    or 0
+                )
+                conv_payload = _serialize_conversation(
+                    linked_conversation,
+                    message_count=mc,
+                    opportunity_count=oc,
+                    max_linked_budget=mb,
+                )
 
         return {
             "opportunity": _serialize_opportunity(opportunity),
-            "conversation": (
-                _serialize_conversation(linked_conversation)
-                if linked_conversation is not None
-                else None
-            ),
+            "conversation": conv_payload,
         }
 
     def _update_conversation_fields(
@@ -842,6 +929,15 @@ class DashboardApp:
         conversation_id: str,
         payload: dict[str, Any],
     ) -> dict[str, Any] | None:
+        old_wf: str | None = None
+        had_archived: bool | None = None
+        with self.session_factory() as session:
+            cur = get_conversation(session, conversation_id)
+            if cur is None:
+                return None
+            old_wf = _effective_workflow_status(cur)
+            had_archived = cur.archived_at is not None
+
         with self.session_factory() as session:
             updated = update_conversation_crm(
                 session,
@@ -852,9 +948,39 @@ class DashboardApp:
                 manual_next_action=payload.get("manual_next_action"),
                 archived=payload.get("archived"),
             )
-            if updated is None:
-                return None
+        if updated is None:
+            return None
 
+        new_wf = _effective_workflow_status(updated)
+        if payload.get("manual_workflow_status") is not None and old_wf != new_wf:
+            with self.session_factory() as s:
+                append_timeline_event(
+                    s,
+                    conversation_id=conversation_id,
+                    opportunity_id=None,
+                    kind="status_change",
+                    title=f"Statut CRM : {old_wf} → {new_wf}",
+                )
+                s.commit()
+
+        if payload.get("archived") is not None:
+            now_arch = updated.archived_at is not None
+            if had_archived is not None and now_arch != had_archived:
+                title = "Conversation archivée" if now_arch else "Conversation désarchivée"
+                with self.session_factory() as s:
+                    append_timeline_event(
+                        s,
+                        conversation_id=conversation_id,
+                        opportunity_id=None,
+                        kind="archive_toggle",
+                        title=title,
+                    )
+                    s.commit()
+
+        with self.session_factory() as session:
+            fresh = get_conversation(session, conversation_id)
+            if fresh is None:
+                return None
             message_count = int(
                 session.scalar(
                     select(func.count()).where(MessageRecord.conversation_id == conversation_id)
@@ -867,11 +993,85 @@ class DashboardApp:
                 )
                 or 0
             )
-
+            mb = max_budget_by_conversation_ids(session, [conversation_id]).get(conversation_id)
             return _serialize_conversation(
-                updated,
+                fresh,
                 message_count=message_count,
                 opportunity_count=opportunity_count,
+                max_linked_budget=mb,
+            )
+
+    def _conversation_quick_action(
+        self,
+        conversation_id: str,
+        action: str,
+    ) -> dict[str, Any] | None:
+        if action == "message_sent":
+            with self.session_factory() as s:
+                append_timeline_event(
+                    s,
+                    conversation_id=conversation_id,
+                    opportunity_id=None,
+                    kind="message_sent",
+                    title="Message envoyé ✓",
+                    detail="Tu as confirmé l’envoi côté Malt.",
+                )
+                s.commit()
+            with self.session_factory() as s:
+                update_conversation_crm(
+                    s,
+                    conversation_id,
+                    manual_workflow_status=AIWorkflowStatus.ATTENTE_REPONSE,
+                    manual_next_action="En attente de réponse client.",
+                    reminder_due_at=None,
+                    bump_updated_at=True,
+                )
+        elif action == "snooze_3d":
+            due = _utcnow() + timedelta(days=3)
+            label = due.strftime("%d/%m/%Y %H:%M")
+            with self.session_factory() as s:
+                append_timeline_event(
+                    s,
+                    conversation_id=conversation_id,
+                    opportunity_id=None,
+                    kind="snooze",
+                    title="Rappel dans 3 jours",
+                    detail=f"Relance prévue vers {label} (UTC).",
+                )
+                s.commit()
+            with self.session_factory() as s:
+                update_conversation_crm(
+                    s,
+                    conversation_id,
+                    manual_workflow_status=AIWorkflowStatus.ATTENTE_REPONSE,
+                    manual_next_action=f"Relancer le client (rappel {label} UTC)",
+                    reminder_due_at=due,
+                )
+        else:
+            raise ValueError("Action inconnue.")
+
+        with self.session_factory() as session:
+            fresh = get_conversation(session, conversation_id)
+            if fresh is None:
+                return None
+            mc = int(
+                session.scalar(
+                    select(func.count()).where(MessageRecord.conversation_id == conversation_id)
+                )
+                or 0
+            )
+            oc = int(
+                session.scalar(
+                    select(func.count()).where(OpportunityRecord.conversation_id == conversation_id)
+                )
+                or 0
+            )
+            mb = max_budget_by_conversation_ids(session, [conversation_id]).get(conversation_id)
+            return _serialize_conversation(
+                fresh,
+                message_count=mc,
+                opportunity_count=oc,
+                max_linked_budget=mb,
             )
 
     def _refresh_conversation_ai(self, conversation_id: str) -> dict[str, Any] | None:
@@ -932,14 +1132,18 @@ class DashboardApp:
             if updated is None:
                 return None
 
+            mb = max_budget_by_conversation_ids(session, [conversation_id]).get(conversation_id)
+            timeline = list_timeline_for_conversation(session, conversation_id)
             return {
                 "conversation": _serialize_conversation(
                     updated,
                     message_count=len(messages),
                     opportunity_count=len(opportunities),
+                    max_linked_budget=mb,
                 ),
                 "messages": [_serialize_message(item) for item in messages],
                 "opportunities": [_serialize_opportunity(item) for item in opportunities],
+                "timeline": [_serialize_timeline_event(ev) for ev in timeline],
             }
 
     def _update_opportunity_fields(
@@ -993,14 +1197,32 @@ class DashboardApp:
                 if updated.conversation_id
                 else None
             )
+            conv_out = None
+            if linked_conversation is not None:
+                cid = linked_conversation.id
+                mb = max_budget_by_conversation_ids(session, [cid]).get(cid)
+                mc = int(
+                    session.scalar(
+                        select(func.count()).where(MessageRecord.conversation_id == cid)
+                    )
+                    or 0
+                )
+                oc = int(
+                    session.scalar(
+                        select(func.count()).where(OpportunityRecord.conversation_id == cid)
+                    )
+                    or 0
+                )
+                conv_out = _serialize_conversation(
+                    linked_conversation,
+                    message_count=mc,
+                    opportunity_count=oc,
+                    max_linked_budget=mb,
+                )
 
             return {
                 "opportunity": _serialize_opportunity(updated),
-                "conversation": (
-                    _serialize_conversation(linked_conversation)
-                    if linked_conversation is not None
-                    else None
-                ),
+                "conversation": conv_out,
             }
 
 
