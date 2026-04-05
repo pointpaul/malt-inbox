@@ -2,11 +2,29 @@
 
 [![CI](https://github.com/pointpaul/malt-inbox/actions/workflows/ci.yml/badge.svg)](https://github.com/pointpaul/malt-inbox/actions/workflows/ci.yml)
 
-Petit CRM **local** pour tes conversations et opportunités Malt : sync dans SQLite sur ta machine, IA optionnelle. **FastAPI** + **Uvicorn** servent l’API et les pages ; rien à « déployer » : tu installes, tu ouvres le navigateur sur **localhost**.
+Inbox locale avec IA pour gérer, prioriser et répondre à tes leads Malt — sans dépendre du site.
 
-![Aperçu du dashboard](docs/malt-inbox.png)
+![Aperçu du dashboard](docs/screenshot.png)
 
-## Lancer sur ta machine
+## Pourquoi
+
+Les conversations et offres Malt s’empilent vite : difficile de voir quoi traiter en premier, ce qui attend un retour client, et ce qui traîne depuis trop longtemps. On finit souvent à répondre « au feeling ».
+
+**Malt Inbox** ajoute une couche CRM légère au-dessus de ton compte : tout est synchronisé **en local** (SQLite), classé par priorité et ancienneté, avec scoring et brouillons de réponse **IA optionnelle**. Rien à héberger : tu lances l’app, tu travailles dans le navigateur.
+
+> Projet **personnel / portfolio**, **non officiel** Malt — construit sérieusement (FastAPI, tests, CI), mais sans lien avec l’entreprise.
+
+## Fonctionnalités
+
+- **Sync locale** des conversations et opportunités dans **SQLite**
+- **Inbox groupée** : prioritaire (score + récent) / récent / ancien — conversations et offres dans le même flux
+- **Scoring** des leads (règles locales + métadonnées) avec explications et suggestions d’action
+- **Génération de réponses** (brouillon) et résumés quand une clé OpenAI est configurée
+- **Suivi simple** : statut, timeline, relances (« Envoyé ✔ », rappel 3 jours)
+- **IA optionnelle** : tout le flux fonctionne sans `OPENAI_API_KEY`
+- **Zéro déploiement** : Uvicorn en local, une URL `localhost`
+
+## Démarrage rapide
 
 Prérequis : **Python 3.10+** et [**uv**](https://docs.astral.sh/uv/).
 
@@ -16,67 +34,74 @@ uv sync --frozen --group dev
 uv run python main.py
 ```
 
-Au démarrage, le **navigateur s’ouvre** sur **http://127.0.0.1:8765** ; colle ton `remember-me` (voir plus bas) si besoin, laisse tourner la première sync, puis utilise le dashboard.
+Au lancement, le **navigateur s’ouvre** sur **http://127.0.0.1:8765**. Renseigne le cookie **remember-me** (voir ci-dessous) dans `.env` ou l’écran **Settings** si besoin. La **première sync** tourne automatiquement ; ensuite tu accèdes au **dashboard** (liste groupée, détail, actions CRM).
 
-Si tu changes les dépendances dans `pyproject.toml` : `uv lock` puis commit du `uv.lock`.
+Si tu modifies les dépendances dans `pyproject.toml` : `uv lock` puis commit du `uv.lock`.
 
-## Première fois
+## Configuration
 
-1. Cookie **remember-me** (obligatoire) et éventuellement **OPENAI_API_KEY** dans `.env` ou via l’écran Settings au premier lancement.
-2. Page de progression pendant la sync initiale, puis le CRM.
-3. Si Malt renvoie **403** (session expirée), l’app te renvoie vers les réglages pour mettre à jour le cookie.
+| Variable | Rôle |
+|----------|------|
+| **`MALT_REMEMBER_ME`** | **Obligatoire** — session Malt (voir section cookie). |
+| **`OPENAI_API_KEY`** | **Optionnelle** — enrichissement IA (résumés, actions, brouillons). |
 
-## Cookie `remember-me`
+Tu peux tout saisir via **Settings** au premier lancement. Si Malt renvoie **403**, la session a expiré : mets à jour le cookie.
 
-Navigateur connecté à Malt → DevTools → Application / Cookies → `https://www.malt.fr` → copier la valeur **remember-me**.
+Détail des options : [`.env.example`](.env.example).
 
-## IA (optionnel)
+## Récupérer le cookie `remember-me`
 
-Sans `OPENAI_API_KEY`, tout fonctionne sans enrichissement IA. Avec une clé : résumés, prochaines actions, brouillons de réponses (voir `MALT_CRM_OPENAI_MODEL` dans [`.env.example`](.env.example)).
+1. Connecte-toi à **Malt** dans le navigateur.  
+2. Ouvre les **DevTools** → **Application** (ou **Stockage**) → **Cookies** → `https://www.malt.fr`.  
+3. Copie la valeur du cookie **`remember-me`** dans `.env` ou Settings.
 
-## Fichiers utiles
+## IA
 
-- **`.env`** — secrets et options (ne pas committer).
-- **`.local/malt_crm.sqlite3`** — base SQLite (créée au premier run).
-- Code applicatif : package **`malt_crm/`**, point d’entrée **`main.py`**.
+- **Sans clé** : sync, inbox, scoring, statuts et CRM fonctionnent normalement (sans textes générés par le modèle).  
+- **Avec clé** : résumés, prochaines actions, brouillons de réponse. Modèle configurable via **`MALT_CRM_OPENAI_MODEL`** (voir `.env.example`).
 
-Détail des variables : [`.env.example`](.env.example) (la plupart du temps seuls `MALT_REMEMBER_ME` et éventuellement `OPENAI_API_KEY` comptent en usage perso).
+## Structure du projet
 
-## Option : Docker
+| Élément | Rôle |
+|---------|------|
+| **`.env`** | Secrets et options (ne jamais committer). |
+| **`.env.example`** | Modèle de configuration documenté. |
+| **`.local/malt_crm.sqlite3`** | Base SQLite (créée au premier run). |
+| **`malt_crm/`** | Code applicatif (API, dashboard, sync, scoring). |
+| **`main.py`** | Point d’entrée : lance le serveur local. |
 
-Si tu préfères un conteneur au lieu d’uv sur l’hôte :
+## Docker (optionnel)
+
+Pour tourner dans un conteneur au lieu d’uv sur la machine :
 
 ```bash
 cp .env.example .env
 docker compose up --build
 ```
 
-Même URL et mêmes volumes (`.env`, `.local`). Pas nécessaire pour l’usage courant.
+Même URL et volumes (`.env`, `.local`). **Pas nécessaire** pour un usage courant sur ta machine.
 
 ## Développement
 
 ```bash
-make sync          # ou : make install
+make sync          # ou make install
 make test
 make lint
 make check         # lint + tests + vulture + compileall
 make hooks         # une fois : pre-commit (Ruff avant commit)
 ```
 
-Équivalent sans Make : `uv sync --frozen --group dev`, puis `uv run pytest`, `uv run ruff check .`, etc.
+Sans Make : `uv sync --frozen --group dev`, puis `uv run pytest`, `uv run ruff check .`, `uv run vulture`, etc.
 
-### Qualité / code mort
+- **`make deadcode`** / `uv run vulture` — code mort (routes FastAPI ignorées via `pyproject.toml`).  
+- **`make cov`** / `pytest --cov` — couverture ; seuil minimal dans `pyproject.toml`.
 
-- **`make deadcode`** ou `uv run vulture` : détecte le code vraiment inutilisé (les routes FastAPI sont ignorées via la config dans `pyproject.toml`).
-- **`make cov`** : rapport de couverture ; le seuil minimal est défini dans `pyproject.toml` (`pytest` le vérifie tout seul).
+## Sécurité et limites
 
-## Sécurité
-
-Pas de mot de passe Malt dans l’app — uniquement le cookie que tu fournis. Données locales (`.env` + SQLite). Ne committe pas `.env`, `.local/`, `.venv/`.
-
-## Limites
-
-Projet non officiel Malt ; l’API Malt peut évoluer. Les réponses s’envoient toujours depuis Malt.
+- **Non officiel** : l’API Malt peut changer ; l’outil peut nécessiter des adaptations.  
+- **Pas de mot de passe Malt** dans l’app : seulement le cookie que tu fournis.  
+- **Données locales** : `.env` + SQLite ; ne committe pas `.env`, `.local/`, `.venv/`.  
+- Les messages partent **toujours depuis Malt** (copier-coller / onglet Malt), pas depuis un envoi direct tiers.
 
 ## Licence
 
