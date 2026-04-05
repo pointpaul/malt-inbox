@@ -28,7 +28,7 @@
 
     function primaryReplyButtonLabel(loading, draftText) {
       if (loading) return "Génération…";
-      return draftText.trim() ? "Régénérer la réponse" : "Générer une réponse";
+      return draftText.trim() ? "Régénérer" : "Générer une réponse";
     }
 
     function formatInlineMarkdown(value) {
@@ -362,7 +362,7 @@
       const score = listRowScoreCompact(item.raw);
       const sep1 = tier && score ? `<span class="row-meta-sep" aria-hidden="true">·</span>` : "";
       const ancienBadge = sectionId === "ancien"
-        ? `<span class="badge stale-thread row-ancien-badge" title="Activité il y a plus de 7 jours — le score seul peut tromper">⚠️ ancien</span>`
+        ? `<span class="badge stale-thread row-ancien-badge" title="Activité il y a plus de 7 jours — le score seul peut tromper"><span class="stale-warn-icon" aria-hidden="true">⚠️</span> ancien</span>`
         : "";
       const sep2 = (tier || score) && ancienBadge ? `<span class="row-meta-sep" aria-hidden="true">·</span>` : "";
       return `<div class="row-meta-line">${tier}${sep1}${score}${sep2}${ancienBadge}</div>`;

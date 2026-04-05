@@ -392,6 +392,24 @@
       font-size: 11px;
     }
 
+    .badge.stale-thread.row-ancien-badge {
+      background: #ffe8c4;
+      color: #4a2500;
+      border: 1px solid #c9950c;
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 0.02em;
+      box-shadow: 0 1px 0 rgba(90, 50, 0, 0.06);
+    }
+
+    .badge.stale-thread.row-ancien-badge .stale-warn-icon {
+      display: inline-block;
+      margin-right: 5px;
+      font-size: 14px;
+      line-height: 1;
+      vertical-align: -0.1em;
+    }
+
     .row-meta-line {
       display: flex;
       flex-wrap: wrap;
