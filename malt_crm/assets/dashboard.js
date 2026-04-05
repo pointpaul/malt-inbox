@@ -117,6 +117,43 @@
       return 2;
     }
 
+    function strengthScoreValue(raw) {
+      const n = raw?.strength?.score;
+      return typeof n === "number" && !Number.isNaN(n) ? n : 0;
+    }
+
+    /** Texte pour l’attribut title (hover) sur le badge score. */
+    function strengthHoverTitle(strength) {
+      if (!strength) return "";
+      const parts = [];
+      if (strength.explanation) {
+        parts.push(strength.explanation);
+      }
+      if (Array.isArray(strength.why) && strength.why.length) {
+        parts.push(strength.why.join(" · "));
+      }
+      return parts.join("\n\n");
+    }
+
+    function renderStrengthInsightBlock(strength, strengthExtraClass = "") {
+      if (!strength) return "";
+      const hover = strengthHoverTitle(strength);
+      const sc = String(strengthExtraClass || "").trim();
+      const strengthClass = sc ? `crm-strength ${sc}` : "crm-strength";
+      const whyList = Array.isArray(strength.why) && strength.why.length
+        ? `<ul class="crm-why">${strength.why.map((line) => `<li>${escapeHtml(line)}</li>`).join("")}</ul>`
+        : "";
+      const actions = Array.isArray(strength.suggested_actions) && strength.suggested_actions.length
+        ? `<div class="crm-suggestions"><span class="crm-suggestions-label">Pistes d’action</span><ul>${strength.suggested_actions.map((line) => `<li>${escapeHtml(line)}</li>`).join("")}</ul></div>`
+        : "";
+      return `
+        <p class="${escapeHtml(strengthClass)}" ${hover ? `title="${escapeHtml(hover)}"` : ""}>${escapeHtml(strength.label)}</p>
+        ${strength.explanation ? `<p class="crm-score-explanation">${escapeHtml(strength.explanation)}</p>` : ""}
+        ${whyList}
+        ${actions}
+      `;
+    }
+
     function fetchJson(url, options) {
       return fetch(url, options).then(async (response) => {
         if (!response.ok) {
@@ -216,6 +253,11 @@
       }));
       return [...conversations, ...opportunities]
         .sort((left, right) => {
+          if (left.kind !== right.kind) {
+            return left.kind === "opportunity" ? -1 : 1;
+          }
+          const sb = strengthScoreValue(right.raw) - strengthScoreValue(left.raw);
+          if (sb !== 0) return sb;
           const tr = feedItemTierRank(left) - feedItemTierRank(right);
           if (tr !== 0) return tr;
           const leftRank = left.status.label === "Action requise" ? 0 : 1;
@@ -292,7 +334,7 @@
       const items = feedItems();
       document.getElementById("listSummary").textContent = state.listView === "archived"
         ? `${items.length} archivés`
-        : `${items.length} éléments`;
+        : `${items.length} éléments — opportunités fortes en tête, puis conversations par priorité`;
 
       if (!items.length) {
         list.innerHTML = '<div class="empty">Aucun message ou opportunité synchronisé.</div>';
@@ -317,7 +359,7 @@
           ? `<span class="badge tier tier-${escapeHtml(item.raw.smart_tier.id)}">${escapeHtml(item.raw.smart_tier.emoji)} ${escapeHtml(item.raw.smart_tier.label)}</span>`
           : ""}
               ${item.raw.strength
-          ? `<span class="badge strength-score">${escapeHtml(item.raw.strength.label)}</span>`
+          ? `<span class="badge strength-score" title="${escapeHtml(strengthHoverTitle(item.raw.strength))}">${escapeHtml(item.raw.strength.label)}</span>`
           : ""}
               <span class="badge ${escapeHtml(item.status.css)}">${escapeHtml(item.status.label)}</span>
               ${item.kind === "opportunity" && item.raw.ai_fit_score != null ? `<span class="badge fit">Fit ${escapeHtml(Math.round(item.raw.ai_fit_score))}</span>` : ""}
@@ -392,9 +434,7 @@
             </div>
           </div>
           <div class="crm-insight">
-            ${conversation.strength
-        ? `<p class="crm-strength">${escapeHtml(conversation.strength.label)}</p>`
-        : ""}
+            ${renderStrengthInsightBlock(conversation.strength)}
             ${conversation.smart_tier && conversation.smart_tier.hint
         ? `<p class="crm-tier-hint">${escapeHtml(conversation.smart_tier.hint)}</p>`
         : ""}
@@ -630,9 +670,7 @@
       document.getElementById("detailTime").textContent = "Réponse et contexte";
       const fitScore = opportunity.ai_fit_score != null ? Math.round(opportunity.ai_fit_score) : null;
       const fitLabel = opportunity.ai_fit_label ? opportunity.ai_fit_label.replaceAll("_", " ") : null;
-      const strengthLine = opportunity.strength
-        ? `<p class="crm-strength opp">${escapeHtml(opportunity.strength.label)}</p>`
-        : "";
+      const strengthBlock = renderStrengthInsightBlock(opportunity.strength, "opp");
 
       body.innerHTML = `
         <div class="detail-toolbar">
@@ -641,7 +679,7 @@
               <h3>${escapeHtml(opportunity.title)}</h3>
               <p>${escapeHtml(formatDate(opportunity.updated_at))}</p>
               <span class="badge ${escapeHtml(status.css)}">${escapeHtml(status.label)}</span>
-              ${fitScore != null ? `<span class="badge fit">Fit ${escapeHtml(fitScore)}${fitLabel ? ` · ${escapeHtml(fitLabel)}` : ""}</span>` : ""}
+              ${fitScore != null ? `<span class="badge fit" title="Adéquation IA (voir détail score ci-dessous)">Fit ${escapeHtml(fitScore)}${fitLabel ? ` · ${escapeHtml(fitLabel)}` : ""}</span>` : ""}
             </div>
             <div class="toolbar-actions">
               <button id="replyAnchorButton" type="button" class="primary-button" ${draftState.loading ? "disabled" : ""}>${draftState.loading ? "Génération..." : "Réponse rapide IA"}</button>
@@ -649,7 +687,7 @@
               <button id="archiveOpportunityButton" type="button" class="danger-button">${opportunity.archived_at ? "Désarchiver" : "Archiver"}</button>
             </div>
           </div>
-          <div class="crm-insight">${strengthLine}</div>
+          <div class="crm-insight">${strengthBlock}</div>
           ${showDraft ? `
             <div id="draftCard" class="draft">
               <div class="draft-head">

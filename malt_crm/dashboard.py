@@ -223,6 +223,7 @@ def _serialize_conversation(
         ai_confidence=record.ai_confidence,
         max_linked_budget=budget,
         message_count=message_count,
+        follow_up_due=follow_up_due,
     )
     return {
         "id": record.id,

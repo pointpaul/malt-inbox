@@ -515,6 +515,53 @@
       font-size: 12px;
     }
 
+    .crm-score-explanation {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .crm-why {
+      margin: 8px 0 0;
+      padding-left: 1.15rem;
+      font-size: 12px;
+      color: var(--ink);
+      line-height: 1.4;
+    }
+
+    .crm-why li {
+      margin-bottom: 4px;
+    }
+
+    .crm-suggestions {
+      margin-top: 10px;
+      padding-top: 8px;
+      border-top: 1px dashed var(--line-strong);
+    }
+
+    .crm-suggestions-label {
+      display: block;
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--muted);
+      margin-bottom: 6px;
+    }
+
+    .crm-suggestions ul {
+      margin: 0;
+      padding-left: 1.15rem;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--reply-ink);
+      line-height: 1.35;
+    }
+
+    .crm-suggestions li {
+      margin-bottom: 4px;
+    }
+
     .quick-actions {
       display: flex;
       flex-wrap: wrap;

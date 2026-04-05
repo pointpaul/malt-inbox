@@ -42,6 +42,23 @@ def test_conversation_strength_bounds() -> None:
     )
     assert 1 <= s["score"] <= 10
     assert "/10" in s["label"]
+    assert s["explanation"]
+    assert isinstance(s["why"], list) and s["why"]
+    assert isinstance(s["suggested_actions"], list) and s["suggested_actions"]
+
+
+def test_conversation_strength_relance_when_follow_up_due() -> None:
+    s = conversation_strength(
+        effective_workflow=AIWorkflowStatus.ATTENTE_REPONSE.value,
+        ai_urgency="low",
+        ai_category="spam",
+        ai_needs_reply=False,
+        ai_confidence=0.5,
+        max_linked_budget=None,
+        message_count=1,
+        follow_up_due=True,
+    )
+    assert "Relancer maintenant" in s["suggested_actions"]
 
 
 def test_opportunity_strength_uses_fit() -> None:
@@ -53,3 +70,6 @@ def test_opportunity_strength_uses_fit() -> None:
 
     s = opportunity_strength(FakeOpp())
     assert 1 <= s["score"] <= 10
+    assert s["explanation"]
+    assert isinstance(s["why"], list) and s["why"]
+    assert isinstance(s["suggested_actions"], list) and s["suggested_actions"]
