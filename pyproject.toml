@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "malt-crm-inbox"
-version = "0.1.0"
+version = "1.0.0"
 description = "Inbox locale pour Malt avec synchronisation HTTP, résumés IA et réponses suggérées"
 readme = "README.md"
 requires-python = ">=3.10"
