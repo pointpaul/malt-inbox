@@ -224,47 +224,165 @@
       return `${kind}:${id}`;
     }
 
-    function feedItems() {
-      const conversations = state.conversations
+    const MS_PER_DAY = 86400000;
+
+    function lastActivityMsFromRaw(raw) {
+      const s = raw?.last_message_at || raw?.updated_at;
+      const t = new Date(s).getTime();
+      return Number.isFinite(t) ? t : 0;
+    }
+
+    /** Âge en jours (flottant) depuis last_message_at ou updated_at. */
+    function ageDaysFromConversationRaw(raw) {
+      const t = lastActivityMsFromRaw(raw);
+      if (!t) return Infinity;
+      return (Date.now() - t) / MS_PER_DAY;
+    }
+
+    function formatConversationAgeLabel(raw) {
+      const ref = new Date(raw?.last_message_at || raw?.updated_at);
+      if (!Number.isFinite(ref.getTime())) return "";
+      const now = new Date();
+      const startRef = new Date(ref.getFullYear(), ref.getMonth(), ref.getDate());
+      const startNow = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      const diffDays = Math.round((startNow - startRef) / MS_PER_DAY);
+      if (diffDays <= 0) return "aujourd'hui";
+      return `il y a ${diffDays} j`;
+    }
+
+    /**
+     * Regroupe les lignes « conversation » (feed items) par score et ancienneté.
+     * @param {Array<{ kind: string, raw: object }>} conversationItems
+     */
+    function getGroupedConversations(conversationItems) {
+      const enriched = conversationItems.map((item) => {
+        const ageDays = ageDaysFromConversationRaw(item.raw);
+        const score = strengthScoreValue(item.raw);
+        const lastT = lastActivityMsFromRaw(item.raw);
+        return { item, ageDays, score, lastT };
+      });
+      const prioritaire = enriched
+        .filter((x) => x.score >= 7 && x.ageDays <= 7)
+        .sort((a, b) => b.score - a.score)
+        .map((x) => x.item);
+      const recent = enriched
+        .filter((x) => !(x.score >= 7 && x.ageDays <= 7) && x.ageDays <= 7)
+        .sort((a, b) => b.lastT - a.lastT)
+        .map((x) => x.item);
+      const ancien = enriched
+        .filter((x) => x.ageDays > 7)
+        .sort((a, b) => b.lastT - a.lastT)
+        .map((x) => x.item);
+      return { prioritaire, recent, ancien };
+    }
+
+    function buildConversationFeedItems() {
+      return state.conversations
         .filter((conversation) => state.listView === "archived"
           ? Boolean(conversation.archived_at || conversation.status === "closed")
           : !Boolean(conversation.archived_at || conversation.status === "closed"))
         .map((conversation) => ({
-        kind: "conversation",
-        id: conversation.id,
-        updated_at: conversation.updated_at,
-        title: conversation.client_name,
-        summary: summaryForConversation(conversation),
-        status: statusForConversation(conversation),
-        raw: conversation,
-      }));
-      const opportunities = state.opportunities
+          kind: "conversation",
+          id: conversation.id,
+          updated_at: conversation.updated_at,
+          title: conversation.client_name,
+          summary: summaryForConversation(conversation),
+          status: statusForConversation(conversation),
+          raw: conversation,
+        }));
+    }
+
+    function buildOpportunityFeedItems() {
+      return state.opportunities
         .filter((opportunity) => state.listView === "archived"
           ? Boolean(opportunity.archived_at)
           : !Boolean(opportunity.archived_at))
         .map((opportunity) => ({
-        kind: "opportunity",
-        id: opportunity.id,
-        updated_at: opportunity.updated_at,
-        title: opportunity.title,
-        summary: summaryForOpportunity(opportunity),
-        status: statusForOpportunity(opportunity),
-        raw: opportunity,
-      }));
-      return [...conversations, ...opportunities]
-        .sort((left, right) => {
-          if (left.kind !== right.kind) {
-            return left.kind === "opportunity" ? -1 : 1;
-          }
-          const sb = strengthScoreValue(right.raw) - strengthScoreValue(left.raw);
-          if (sb !== 0) return sb;
-          const tr = feedItemTierRank(left) - feedItemTierRank(right);
-          if (tr !== 0) return tr;
-          const leftRank = left.status.label === "Action requise" ? 0 : 1;
-          const rightRank = right.status.label === "Action requise" ? 0 : 1;
-          if (leftRank !== rightRank) return leftRank - rightRank;
-          return new Date(right.updated_at) - new Date(left.updated_at);
-        });
+          kind: "opportunity",
+          id: opportunity.id,
+          updated_at: opportunity.updated_at,
+          title: opportunity.title,
+          summary: summaryForOpportunity(opportunity),
+          status: statusForOpportunity(opportunity),
+          raw: opportunity,
+        }));
+    }
+
+    function sortOpportunityFeedItems(items) {
+      return [...items].sort((left, right) => {
+        const sb = strengthScoreValue(right.raw) - strengthScoreValue(left.raw);
+        if (sb !== 0) return sb;
+        const tr = feedItemTierRank(left) - feedItemTierRank(right);
+        if (tr !== 0) return tr;
+        const leftRank = left.status.label === "Action requise" ? 0 : 1;
+        const rightRank = right.status.label === "Action requise" ? 0 : 1;
+        if (leftRank !== rightRank) return leftRank - rightRank;
+        return new Date(right.updated_at) - new Date(left.updated_at);
+      });
+    }
+
+    function sortConversationFeedItemsFlat(items) {
+      return [...items].sort((left, right) => {
+        const sb = strengthScoreValue(right.raw) - strengthScoreValue(left.raw);
+        if (sb !== 0) return sb;
+        const tr = feedItemTierRank(left) - feedItemTierRank(right);
+        if (tr !== 0) return tr;
+        const leftRank = left.status.label === "Action requise" ? 0 : 1;
+        const rightRank = right.status.label === "Action requise" ? 0 : 1;
+        if (leftRank !== rightRank) return leftRank - rightRank;
+        return new Date(right.updated_at) - new Date(left.updated_at);
+      });
+    }
+
+    /** Ordre plat = ordre d’affichage (navigation clavier, sélection par défaut). */
+    function feedItems() {
+      const opps = sortOpportunityFeedItems(buildOpportunityFeedItems());
+      const conv = buildConversationFeedItems();
+      if (state.listView === "archived") {
+        return [...opps, ...sortConversationFeedItemsFlat(conv)];
+      }
+      const g = getGroupedConversations(conv);
+      return [...opps, ...g.prioritaire, ...g.recent, ...g.ancien];
+    }
+
+    function renderFeedRow(item, rowExtraClass) {
+      const active = state.selectedItem
+        && state.selectedItem.kind === item.kind
+        && state.selectedItem.id === item.id;
+      const extra = rowExtraClass ? ` ${rowExtraClass}` : "";
+      const ageDays = item.kind === "conversation" ? ageDaysFromConversationRaw(item.raw) : 0;
+      const ageLabel = item.kind === "conversation" ? formatConversationAgeLabel(item.raw) : "";
+      const staleBadge = item.kind === "conversation" && ageDays > 14
+        ? `<span class="badge stale-thread" title="Dernière activité il y a plus de 14 jours">⚠️ ancien</span>`
+        : "";
+      const ageSpan = item.kind === "conversation" && ageLabel
+        ? `<span class="row-age">${escapeHtml(ageLabel)}</span>`
+        : "";
+      return `
+          <article class="row${extra} ${active ? "active" : ""}" data-kind="${escapeHtml(item.kind)}" data-id="${escapeHtml(item.id)}">
+            <div class="row-top">
+              <div class="row-main">
+                <p class="client-name">${escapeHtml(item.title)}</p>
+              </div>
+              <div class="row-time-block">
+                <div class="time">${escapeHtml(formatRelative(item.updated_at))}</div>
+                ${ageSpan}
+              </div>
+            </div>
+            <p class="summary">${escapeHtml(item.summary)}</p>
+            <div class="row-actions">
+              ${item.kind === "conversation" && item.raw.smart_tier
+          ? `<span class="badge tier tier-${escapeHtml(item.raw.smart_tier.id)}">${escapeHtml(item.raw.smart_tier.emoji)} ${escapeHtml(item.raw.smart_tier.label)}</span>`
+          : ""}
+              ${item.raw.strength
+          ? `<span class="badge strength-score" title="${escapeHtml(strengthHoverTitle(item.raw.strength))}">${escapeHtml(item.raw.strength.label)}</span>`
+          : ""}
+              ${staleBadge}
+              <span class="badge ${escapeHtml(item.status.css)}">${escapeHtml(item.status.label)}</span>
+              ${item.kind === "opportunity" && item.raw.ai_fit_score != null ? `<span class="badge fit">Fit ${escapeHtml(Math.round(item.raw.ai_fit_score))}</span>` : ""}
+            </div>
+          </article>
+        `;
     }
 
     function workflowValueForConversation(conversation) {
@@ -334,39 +452,40 @@
       const items = feedItems();
       document.getElementById("listSummary").textContent = state.listView === "archived"
         ? `${items.length} archivés`
-        : `${items.length} éléments — opportunités fortes en tête, puis conversations par priorité`;
+        : `${items.length} éléments — opportunités, puis conversations (prioritaires · récent · ancien)`;
 
       if (!items.length) {
         list.innerHTML = '<div class="empty">Aucun message ou opportunité synchronisé.</div>';
         return;
       }
 
-      list.innerHTML = items.map((item) => {
-        const active = state.selectedItem
-          && state.selectedItem.kind === item.kind
-          && state.selectedItem.id === item.id;
-        return `
-          <article class="row ${active ? "active" : ""}" data-kind="${escapeHtml(item.kind)}" data-id="${escapeHtml(item.id)}">
-            <div class="row-top">
-              <div class="row-main">
-                <p class="client-name">${escapeHtml(item.title)}</p>
-              </div>
-              <div class="time">${escapeHtml(formatRelative(item.updated_at))}</div>
-            </div>
-            <p class="summary">${escapeHtml(item.summary)}</p>
-            <div class="row-actions">
-              ${item.kind === "conversation" && item.raw.smart_tier
-          ? `<span class="badge tier tier-${escapeHtml(item.raw.smart_tier.id)}">${escapeHtml(item.raw.smart_tier.emoji)} ${escapeHtml(item.raw.smart_tier.label)}</span>`
-          : ""}
-              ${item.raw.strength
-          ? `<span class="badge strength-score" title="${escapeHtml(strengthHoverTitle(item.raw.strength))}">${escapeHtml(item.raw.strength.label)}</span>`
-          : ""}
-              <span class="badge ${escapeHtml(item.status.css)}">${escapeHtml(item.status.label)}</span>
-              ${item.kind === "opportunity" && item.raw.ai_fit_score != null ? `<span class="badge fit">Fit ${escapeHtml(Math.round(item.raw.ai_fit_score))}</span>` : ""}
-            </div>
-          </article>
-        `;
-      }).join("");
+      if (state.listView === "archived") {
+        list.innerHTML = items.map((item) => renderFeedRow(item, "")).join("");
+      } else {
+        const opps = sortOpportunityFeedItems(buildOpportunityFeedItems());
+        const conv = buildConversationFeedItems();
+        const g = getGroupedConversations(conv);
+        const blocks = [];
+        if (opps.length) {
+          blocks.push('<section class="inbox-section"><h3 class="inbox-section-title">Opportunités</h3>');
+          blocks.push(opps.map((item) => renderFeedRow(item, "")).join(""));
+          blocks.push("</section>");
+        }
+        const sections = [
+          { key: "prioritaire", title: "🔥 Opportunités prioritaires", rows: g.prioritaire, wrapClass: "" },
+          { key: "recent", title: "🕒 Récent", rows: g.recent, wrapClass: "" },
+          { key: "ancien", title: "📦 Ancien", rows: g.ancien, wrapClass: "inbox-section-ancien" },
+        ];
+        for (const sec of sections) {
+          if (!sec.rows.length) continue;
+          blocks.push(
+            `<section class="inbox-section ${sec.wrapClass}"><h3 class="inbox-section-title">${escapeHtml(sec.title)}</h3>`,
+          );
+          blocks.push(sec.rows.map((item) => renderFeedRow(item, "")).join(""));
+          blocks.push("</section>");
+        }
+        list.innerHTML = blocks.join("");
+      }
 
       list.querySelectorAll(".row").forEach((node) => {
         node.addEventListener("click", () => {

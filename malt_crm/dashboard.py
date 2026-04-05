@@ -230,6 +230,8 @@ def _serialize_conversation(
         "client_name": record.client_name,
         "last_message": record.last_message,
         "updated_at": record.updated_at.isoformat(),
+        # Dernière activité connue sur le fil (aligné sur updated_at tant que le sync Malt ne fournit pas l’heure exacte du dernier message).
+        "last_message_at": record.updated_at.isoformat(),
         "status": record.status,
         "priority": record.priority,
         "message_count": message_count,

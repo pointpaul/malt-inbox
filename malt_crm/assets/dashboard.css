@@ -338,9 +338,58 @@
     }
 
     .inbox-list {
-      display: grid;
+      display: flex;
+      flex-direction: column;
       overflow: auto;
       min-height: 0;
+    }
+
+    .inbox-section {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .inbox-section + .inbox-section {
+      margin-top: 14px;
+      padding-top: 14px;
+      border-top: 1px solid var(--line-strong);
+    }
+
+    .inbox-section-title {
+      margin: 0 0 8px;
+      padding: 0 14px;
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.06em;
+      color: var(--muted);
+      text-transform: uppercase;
+    }
+
+    .inbox-section-ancien .row {
+      opacity: 0.88;
+    }
+
+    .row-time-block {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      gap: 2px;
+      flex-shrink: 0;
+      text-align: right;
+    }
+
+    .row-age {
+      font-size: 10px;
+      color: var(--muted);
+      font-weight: 600;
+      white-space: nowrap;
+    }
+
+    .badge.stale-thread {
+      background: #fff8e6;
+      color: #8a5a00;
+      border-color: #f0e0b8;
+      font-size: 11px;
     }
 
     .row {
