@@ -800,46 +800,6 @@
       justify-content: flex-end;
     }
 
-    .more-actions {
-      position: relative;
-    }
-
-    .more-menu {
-      position: absolute;
-      top: calc(100% + 8px);
-      right: 0;
-      min-width: 176px;
-      padding: 6px;
-      border: 1px solid var(--line);
-      border-radius: 12px;
-      background: #ffffff;
-      box-shadow: 0 12px 28px rgba(15, 15, 15, 0.08);
-      display: none;
-      z-index: 4;
-    }
-
-    .more-menu.open {
-      display: grid;
-      gap: 6px;
-    }
-
-    .menu-button {
-      width: 100%;
-      text-align: left;
-      min-height: 34px;
-      padding: 8px 9px;
-      border: 0;
-      border-radius: 10px;
-      background: #f7f6f2;
-      color: var(--ink);
-      font-size: 12px;
-      font-weight: 600;
-    }
-
-    .menu-button:hover {
-      background: #efede6;
-    }
-
     .detail-actions {
       display: grid;
       gap: 6px;

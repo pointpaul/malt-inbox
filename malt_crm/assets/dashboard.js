@@ -26,6 +26,11 @@
         .replaceAll("'", "&#39;");
     }
 
+    function primaryReplyButtonLabel(loading, draftText) {
+      if (loading) return "Génération…";
+      return draftText.trim() ? "Régénérer la réponse" : "Générer une réponse";
+    }
+
     function formatInlineMarkdown(value) {
       const escaped = escapeHtml(value);
       return escaped.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
@@ -537,15 +542,9 @@
           : ""}
             </div>
             <div class="toolbar-actions">
-              <button id="replyAnchorButton" type="button" class="primary-button" ${draftState.loading ? "disabled" : ""}>${draftState.loading ? "Génération..." : "Réponse rapide IA"}</button>
+              <button id="replyAnchorButton" type="button" class="primary-button" ${draftState.loading ? "disabled" : ""}>${escapeHtml(primaryReplyButtonLabel(draftState.loading, replyDraft))}</button>
               <a class="detail-link" href="https://www.malt.fr/messages/${encodeURIComponent(conversation.id)}" target="_blank" rel="noopener noreferrer">Ouvrir Malt</a>
               <button id="archiveInlineButton" type="button" class="danger-button">${conversation.archived_at ? "Désarchiver" : "Archiver"}</button>
-              <div class="more-actions">
-                <button id="moreActionsButton" type="button" class="ghost-button">...</button>
-                <div id="moreActionsMenu" class="more-menu">
-                  <button id="aiRefreshButton" type="button" class="menu-button">Régénérer la réponse IA</button>
-                </div>
-              </div>
             </div>
           </div>
           <div class="crm-insight">
@@ -565,7 +564,7 @@
             <div id="draftCard" class="draft">
               <div class="draft-head">
                 <h3>Réponse suggérée</h3>
-                <span class="draft-status">${draftState.loading ? "Génération..." : (replyDraft.trim() ? "Prêt à envoyer" : "Aucune réponse suggérée")}</span>
+                <span class="draft-status">${draftState.loading ? "Génération…" : (replyDraft.trim() ? "Prêt à envoyer" : "Aucune réponse suggérée")}</span>
               </div>
               ${draftState.note ? `<div class="draft-hint">${escapeHtml(draftState.note)}</div>` : ""}
               <textarea id="replyDraftField" ${draftState.loading ? "disabled" : ""} placeholder="La réponse IA apparaîtra ici.">${escapeHtml(replyDraft)}</textarea>
@@ -627,16 +626,6 @@
 
       body.scrollTop = 0;
 
-      const moreButton = document.getElementById("moreActionsButton");
-      const moreMenu = document.getElementById("moreActionsMenu");
-      moreButton.addEventListener("click", (event) => {
-        event.stopPropagation();
-        moreMenu.classList.toggle("open");
-      });
-      document.addEventListener("click", () => {
-        moreMenu.classList.remove("open");
-      }, { once: true });
-
       document.getElementById("quickSentOk").addEventListener("click", async () => {
         try {
           const updated = await postConversationQuickAction(conversation.id, "message_sent");
@@ -685,12 +674,6 @@
         } catch (error) {
           alert(error.message);
         }
-      });
-
-      document.getElementById("aiRefreshButton").addEventListener("click", () => {
-        generateReplyDraft("conversation", conversation.id).catch((error) => {
-          alert(error.message);
-        });
       });
 
       document.getElementById("replyAnchorButton").addEventListener("click", () => {
@@ -797,7 +780,7 @@
               ${fitScore != null ? `<span class="badge fit" title="Adéquation IA (voir détail score ci-dessous)">Fit ${escapeHtml(fitScore)}${fitLabel ? ` · ${escapeHtml(fitLabel)}` : ""}</span>` : ""}
             </div>
             <div class="toolbar-actions">
-              <button id="replyAnchorButton" type="button" class="primary-button" ${draftState.loading ? "disabled" : ""}>${draftState.loading ? "Génération..." : "Réponse rapide IA"}</button>
+              <button id="replyAnchorButton" type="button" class="primary-button" ${draftState.loading ? "disabled" : ""}>${escapeHtml(primaryReplyButtonLabel(draftState.loading, replyDraft))}</button>
               <a class="detail-link" href="https://www.malt.fr/messages/client-project-offer/${encodeURIComponent(opportunity.id)}" target="_blank" rel="noopener noreferrer">Ouvrir Malt</a>
               <button id="archiveOpportunityButton" type="button" class="danger-button">${opportunity.archived_at ? "Désarchiver" : "Archiver"}</button>
             </div>
@@ -807,7 +790,7 @@
             <div id="draftCard" class="draft">
               <div class="draft-head">
                 <h3>Réponse suggérée</h3>
-                <span class="draft-status">${draftState.loading ? "Génération..." : (replyDraft.trim() ? "Prêt à envoyer" : "Aucune réponse suggérée")}</span>
+                <span class="draft-status">${draftState.loading ? "Génération…" : (replyDraft.trim() ? "Prêt à envoyer" : "Aucune réponse suggérée")}</span>
               </div>
               ${draftState.note ? `<div class="draft-hint">${escapeHtml(draftState.note)}</div>` : ""}
               <textarea id="replyDraftField" ${draftState.loading ? "disabled" : ""} placeholder="La réponse IA apparaîtra ici.">${escapeHtml(replyDraft)}</textarea>
