@@ -99,6 +99,24 @@
       return `${diffDays} j`;
     }
 
+    function smartTierRank(tier) {
+      if (!tier || !tier.id) return 2;
+      if (tier.id === "hot") return 0;
+      if (tier.id === "follow_up") return 1;
+      return 2;
+    }
+
+    function feedItemTierRank(item) {
+      if (item.kind === "conversation") {
+        return smartTierRank(item.raw.smart_tier);
+      }
+      const s = item.raw.strength?.score;
+      if (s == null) return 2;
+      if (s >= 8) return 0;
+      if (s >= 5) return 1;
+      return 2;
+    }
+
     function fetchJson(url, options) {
       return fetch(url, options).then(async (response) => {
         if (!response.ok) {
@@ -198,6 +216,8 @@
       }));
       return [...conversations, ...opportunities]
         .sort((left, right) => {
+          const tr = feedItemTierRank(left) - feedItemTierRank(right);
+          if (tr !== 0) return tr;
           const leftRank = left.status.label === "Action requise" ? 0 : 1;
           const rightRank = right.status.label === "Action requise" ? 0 : 1;
           if (leftRank !== rightRank) return leftRank - rightRank;
@@ -293,6 +313,12 @@
             </div>
             <p class="summary">${escapeHtml(item.summary)}</p>
             <div class="row-actions">
+              ${item.kind === "conversation" && item.raw.smart_tier
+          ? `<span class="badge tier tier-${escapeHtml(item.raw.smart_tier.id)}">${escapeHtml(item.raw.smart_tier.emoji)} ${escapeHtml(item.raw.smart_tier.label)}</span>`
+          : ""}
+              ${item.raw.strength
+          ? `<span class="badge strength-score">${escapeHtml(item.raw.strength.label)}</span>`
+          : ""}
               <span class="badge ${escapeHtml(item.status.css)}">${escapeHtml(item.status.label)}</span>
               ${item.kind === "opportunity" && item.raw.ai_fit_score != null ? `<span class="badge fit">Fit ${escapeHtml(Math.round(item.raw.ai_fit_score))}</span>` : ""}
             </div>
@@ -337,6 +363,7 @@
           };
       const replyDraft = draftState.text || "";
       const showDraft = draftState.visible || draftState.loading || Boolean(replyDraft);
+      const timeline = state.selectedDetail.timeline || [];
 
       document.getElementById("detailTitle").textContent = "Conversation";
       document.getElementById("detailTime").textContent = "Réponse et messages";
@@ -348,6 +375,9 @@
               <h3>${escapeHtml(conversation.client_name)}</h3>
               <p>${escapeHtml(formatDate(conversation.updated_at))}</p>
               <span class="badge ${escapeHtml(status.css)}">${escapeHtml(status.label)}</span>
+              ${conversation.smart_tier
+          ? `<span class="badge tier tier-${escapeHtml(conversation.smart_tier.id)}">${escapeHtml(conversation.smart_tier.emoji)} ${escapeHtml(conversation.smart_tier.label)}</span>`
+          : ""}
             </div>
             <div class="toolbar-actions">
               <button id="replyAnchorButton" type="button" class="primary-button" ${draftState.loading ? "disabled" : ""}>${draftState.loading ? "Génération..." : "Réponse rapide IA"}</button>
@@ -360,6 +390,21 @@
                 </div>
               </div>
             </div>
+          </div>
+          <div class="crm-insight">
+            ${conversation.strength
+        ? `<p class="crm-strength">${escapeHtml(conversation.strength.label)}</p>`
+        : ""}
+            ${conversation.smart_tier && conversation.smart_tier.hint
+        ? `<p class="crm-tier-hint">${escapeHtml(conversation.smart_tier.hint)}</p>`
+        : ""}
+            ${conversation.reminder_due_at
+        ? `<p class="crm-reminder">Rappel : ${escapeHtml(formatDate(conversation.reminder_due_at))}</p>`
+        : ""}
+          </div>
+          <div class="quick-actions">
+            <button id="quickSentOk" type="button" class="ghost-button">Envoyé ✔</button>
+            <button id="quickSnooze3d" type="button" class="ghost-button">Relancer dans 3 jours</button>
           </div>
           ${showDraft ? `
             <div id="draftCard" class="draft">
@@ -409,6 +454,20 @@
             `;
           }).join("") : '<div class="empty">Aucun message synchronisé.</div>'}
         </div>
+        <p class="thread-title">Activité CRM</p>
+        <div class="timeline">
+          ${timeline.length
+        ? timeline.map((ev) => `
+            <article class="timeline-event kind-${escapeHtml(ev.kind)}">
+              <div class="timeline-meta">
+                <span class="timeline-title">${escapeHtml(ev.title)}</span>
+                <span class="timeline-when">${escapeHtml(formatDate(ev.created_at))}</span>
+              </div>
+              ${ev.detail ? `<p class="timeline-detail">${escapeHtml(ev.detail)}</p>` : ""}
+            </article>
+          `).join("")
+        : '<div class="empty">Historique vide — utilise les boutons ci-dessus ou change le statut.</div>'}
+        </div>
       `;
 
       body.scrollTop = 0;
@@ -423,6 +482,26 @@
         moreMenu.classList.remove("open");
       }, { once: true });
 
+      document.getElementById("quickSentOk").addEventListener("click", async () => {
+        try {
+          const updated = await postConversationQuickAction(conversation.id, "message_sent");
+          mergeConversation(updated);
+          await selectItem("conversation", conversation.id);
+        } catch (error) {
+          alert(error.message);
+        }
+      });
+
+      document.getElementById("quickSnooze3d").addEventListener("click", async () => {
+        try {
+          const updated = await postConversationQuickAction(conversation.id, "snooze_3d");
+          mergeConversation(updated);
+          await selectItem("conversation", conversation.id);
+        } catch (error) {
+          alert(error.message);
+        }
+      });
+
       document.getElementById("archiveInlineButton").addEventListener("click", async () => {
         try {
           const updated = await updateConversationCRM(conversation.id, {
@@ -430,7 +509,7 @@
           });
           mergeConversation(updated);
           state.selectedDetail.conversation = updated;
-          render();
+          await selectItem("conversation", conversation.id);
         } catch (error) {
           alert(error.message);
         }
@@ -447,8 +526,7 @@
         try {
           const updated = await updateConversationCRM(conversation.id, payload);
           mergeConversation(updated);
-          state.selectedDetail.conversation = updated;
-          render();
+          await selectItem("conversation", conversation.id);
         } catch (error) {
           alert(error.message);
         }
@@ -552,6 +630,9 @@
       document.getElementById("detailTime").textContent = "Réponse et contexte";
       const fitScore = opportunity.ai_fit_score != null ? Math.round(opportunity.ai_fit_score) : null;
       const fitLabel = opportunity.ai_fit_label ? opportunity.ai_fit_label.replaceAll("_", " ") : null;
+      const strengthLine = opportunity.strength
+        ? `<p class="crm-strength opp">${escapeHtml(opportunity.strength.label)}</p>`
+        : "";
 
       body.innerHTML = `
         <div class="detail-toolbar">
@@ -568,6 +649,7 @@
               <button id="archiveOpportunityButton" type="button" class="danger-button">${opportunity.archived_at ? "Désarchiver" : "Archiver"}</button>
             </div>
           </div>
+          <div class="crm-insight">${strengthLine}</div>
           ${showDraft ? `
             <div id="draftCard" class="draft">
               <div class="draft-head">
@@ -701,6 +783,14 @@
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
+      });
+    }
+
+    function postConversationQuickAction(conversationId, action) {
+      return fetchJson(`/api/conversations/${encodeURIComponent(conversationId)}/actions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action }),
       });
     }
 
