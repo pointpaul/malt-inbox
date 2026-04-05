@@ -233,13 +233,13 @@
     }
 
     /** Âge en jours (flottant) depuis last_message_at ou updated_at. */
-    function ageDaysFromConversationRaw(raw) {
+    function ageDaysFromItemRaw(raw) {
       const t = lastActivityMsFromRaw(raw);
       if (!t) return Infinity;
       return (Date.now() - t) / MS_PER_DAY;
     }
 
-    function formatConversationAgeLabel(raw) {
+    function formatItemAgeLabel(raw) {
       const ref = new Date(raw?.last_message_at || raw?.updated_at);
       if (!Number.isFinite(ref.getTime())) return "";
       const now = new Date();
@@ -251,12 +251,12 @@
     }
 
     /**
-     * Regroupe les lignes « conversation » (feed items) par score et ancienneté.
-     * @param {Array<{ kind: string, raw: object }>} conversationItems
+     * Regroupe conversations + opportunités par score et ancienneté.
+     * @param {Array<{ kind: string, raw: object }>} inboxItems
      */
-    function getGroupedConversations(conversationItems) {
-      const enriched = conversationItems.map((item) => {
-        const ageDays = ageDaysFromConversationRaw(item.raw);
+    function getGroupedInboxItems(inboxItems) {
+      const enriched = inboxItems.map((item) => {
+        const ageDays = ageDaysFromItemRaw(item.raw);
         const score = strengthScoreValue(item.raw);
         const lastT = lastActivityMsFromRaw(item.raw);
         return { item, ageDays, score, lastT };
@@ -308,7 +308,7 @@
         }));
     }
 
-    function sortOpportunityFeedItems(items) {
+    function sortMergedFeedItemsFlat(items) {
       return [...items].sort((left, right) => {
         const sb = strengthScoreValue(right.raw) - strengthScoreValue(left.raw);
         if (sb !== 0) return sb;
@@ -321,45 +321,58 @@
       });
     }
 
-    function sortConversationFeedItemsFlat(items) {
-      return [...items].sort((left, right) => {
-        const sb = strengthScoreValue(right.raw) - strengthScoreValue(left.raw);
-        if (sb !== 0) return sb;
-        const tr = feedItemTierRank(left) - feedItemTierRank(right);
-        if (tr !== 0) return tr;
-        const leftRank = left.status.label === "Action requise" ? 0 : 1;
-        const rightRank = right.status.label === "Action requise" ? 0 : 1;
-        if (leftRank !== rightRank) return leftRank - rightRank;
-        return new Date(right.updated_at) - new Date(left.updated_at);
-      });
+    function buildMergedFeedItems() {
+      return [...buildConversationFeedItems(), ...buildOpportunityFeedItems()];
     }
 
     /** Ordre plat = ordre d’affichage (navigation clavier, sélection par défaut). */
     function feedItems() {
-      const opps = sortOpportunityFeedItems(buildOpportunityFeedItems());
-      const conv = buildConversationFeedItems();
+      const merged = buildMergedFeedItems();
       if (state.listView === "archived") {
-        return [...opps, ...sortConversationFeedItemsFlat(conv)];
+        return sortMergedFeedItemsFlat(merged);
       }
-      const g = getGroupedConversations(conv);
-      return [...opps, ...g.prioritaire, ...g.recent, ...g.ancien];
+      const g = getGroupedInboxItems(merged);
+      return [...g.prioritaire, ...g.recent, ...g.ancien];
     }
 
-    function renderFeedRow(item, rowExtraClass) {
+    function listRowTierCompact(item) {
+      if (item.kind !== "conversation" || !item.raw.smart_tier) return "";
+      const t = item.raw.smart_tier;
+      const hint = t.hint || t.label || "";
+      return `<span class="row-tier-compact tier-${escapeHtml(t.id)}" title="${escapeHtml(hint)}">${escapeHtml(t.emoji)} ${escapeHtml(t.label)}</span>`;
+    }
+
+    function listRowScoreCompact(raw) {
+      const s = raw?.strength?.score;
+      if (s == null) return "";
+      const hover = strengthHoverTitle(raw.strength);
+      return `<span class="row-score-compact" title="${escapeHtml(hover)}"><span class="row-score-icon" aria-hidden="true">⚡</span>${escapeHtml(s)}/10</span>`;
+    }
+
+    /**
+     * @param {string | null} sectionId — "prioritaire" | "recent" | "ancien" pour la vue active ; null si archivé
+     */
+    function listRowMetaLine(item, sectionId) {
+      const tier = listRowTierCompact(item);
+      const score = listRowScoreCompact(item.raw);
+      const sep1 = tier && score ? `<span class="row-meta-sep" aria-hidden="true">·</span>` : "";
+      const ancienBadge = sectionId === "ancien"
+        ? `<span class="badge stale-thread row-ancien-badge" title="Activité il y a plus de 7 jours — le score seul peut tromper">⚠️ ancien</span>`
+        : "";
+      const sep2 = (tier || score) && ancienBadge ? `<span class="row-meta-sep" aria-hidden="true">·</span>` : "";
+      return `<div class="row-meta-line">${tier}${sep1}${score}${sep2}${ancienBadge}</div>`;
+    }
+
+    function renderFeedRow(item, sectionId) {
       const active = state.selectedItem
         && state.selectedItem.kind === item.kind
         && state.selectedItem.id === item.id;
-      const extra = rowExtraClass ? ` ${rowExtraClass}` : "";
-      const ageDays = item.kind === "conversation" ? ageDaysFromConversationRaw(item.raw) : 0;
-      const ageLabel = item.kind === "conversation" ? formatConversationAgeLabel(item.raw) : "";
-      const staleBadge = item.kind === "conversation" && ageDays > 14
-        ? `<span class="badge stale-thread" title="Dernière activité il y a plus de 14 jours">⚠️ ancien</span>`
-        : "";
-      const ageSpan = item.kind === "conversation" && ageLabel
+      const ageLabel = formatItemAgeLabel(item.raw);
+      const ageSpan = ageLabel
         ? `<span class="row-age">${escapeHtml(ageLabel)}</span>`
         : "";
       return `
-          <article class="row${extra} ${active ? "active" : ""}" data-kind="${escapeHtml(item.kind)}" data-id="${escapeHtml(item.id)}">
+          <article class="row ${active ? "active" : ""}" data-kind="${escapeHtml(item.kind)}" data-id="${escapeHtml(item.id)}">
             <div class="row-top">
               <div class="row-main">
                 <p class="client-name">${escapeHtml(item.title)}</p>
@@ -370,17 +383,7 @@
               </div>
             </div>
             <p class="summary">${escapeHtml(item.summary)}</p>
-            <div class="row-actions">
-              ${item.kind === "conversation" && item.raw.smart_tier
-          ? `<span class="badge tier tier-${escapeHtml(item.raw.smart_tier.id)}">${escapeHtml(item.raw.smart_tier.emoji)} ${escapeHtml(item.raw.smart_tier.label)}</span>`
-          : ""}
-              ${item.raw.strength
-          ? `<span class="badge strength-score" title="${escapeHtml(strengthHoverTitle(item.raw.strength))}">${escapeHtml(item.raw.strength.label)}</span>`
-          : ""}
-              ${staleBadge}
-              <span class="badge ${escapeHtml(item.status.css)}">${escapeHtml(item.status.label)}</span>
-              ${item.kind === "opportunity" && item.raw.ai_fit_score != null ? `<span class="badge fit">Fit ${escapeHtml(Math.round(item.raw.ai_fit_score))}</span>` : ""}
-            </div>
+            ${listRowMetaLine(item, sectionId)}
           </article>
         `;
     }
@@ -452,7 +455,7 @@
       const items = feedItems();
       document.getElementById("listSummary").textContent = state.listView === "archived"
         ? `${items.length} archivés`
-        : `${items.length} éléments — opportunités, puis conversations (prioritaires · récent · ancien)`;
+        : `${items.length} éléments — 🔥 prioritaires · 🕒 récent · 📦 ancien`;
 
       if (!items.length) {
         list.innerHTML = '<div class="empty">Aucun message ou opportunité synchronisé.</div>';
@@ -460,28 +463,21 @@
       }
 
       if (state.listView === "archived") {
-        list.innerHTML = items.map((item) => renderFeedRow(item, "")).join("");
+        list.innerHTML = items.map((item) => renderFeedRow(item, null)).join("");
       } else {
-        const opps = sortOpportunityFeedItems(buildOpportunityFeedItems());
-        const conv = buildConversationFeedItems();
-        const g = getGroupedConversations(conv);
-        const blocks = [];
-        if (opps.length) {
-          blocks.push('<section class="inbox-section"><h3 class="inbox-section-title">Opportunités</h3>');
-          blocks.push(opps.map((item) => renderFeedRow(item, "")).join(""));
-          blocks.push("</section>");
-        }
+        const g = getGroupedInboxItems(buildMergedFeedItems());
         const sections = [
-          { key: "prioritaire", title: "🔥 Opportunités prioritaires", rows: g.prioritaire, wrapClass: "" },
-          { key: "recent", title: "🕒 Récent", rows: g.recent, wrapClass: "" },
-          { key: "ancien", title: "📦 Ancien", rows: g.ancien, wrapClass: "inbox-section-ancien" },
+          { id: "prioritaire", title: "🔥 Prioritaires", rows: g.prioritaire, wrapClass: "" },
+          { id: "recent", title: "🕒 Récent", rows: g.recent, wrapClass: "" },
+          { id: "ancien", title: "📦 Ancien", rows: g.ancien, wrapClass: "inbox-section-ancien" },
         ];
+        const blocks = [];
         for (const sec of sections) {
           if (!sec.rows.length) continue;
           blocks.push(
             `<section class="inbox-section ${sec.wrapClass}"><h3 class="inbox-section-title">${escapeHtml(sec.title)}</h3>`,
           );
-          blocks.push(sec.rows.map((item) => renderFeedRow(item, "")).join(""));
+          blocks.push(sec.rows.map((item) => renderFeedRow(item, sec.id)).join(""));
           blocks.push("</section>");
         }
         list.innerHTML = blocks.join("");
