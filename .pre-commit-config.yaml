@@ -1,0 +1,8 @@
+# Installer une fois : uv sync --frozen --group dev && uv run pre-commit install
+# Vérifier tout le repo : uv run pre-commit run --all-files
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.7
+    hooks:
+      - id: ruff-check
+        args: [--fix]

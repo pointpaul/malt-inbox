@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Malt Inbox · Paramètres</title>
+  <style>
+    :root {
+      --bg: #f3f2ee;
+      --panel: #ffffff;
+      --line: #e5e0d5;
+      --ink: #1b1a16;
+      --muted: #6f6a5f;
+      --primary: #171717;
+    }
+    * {
+      box-sizing: border-box;
+    }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: "Avenir Next", "Helvetica Neue", sans-serif;
+      padding: 20px;
+    }
+    .card {
+      width: min(640px, 100%);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: var(--panel);
+      padding: 22px;
+      box-shadow: 0 8px 26px rgba(20, 20, 20, 0.04);
+      display: grid;
+      gap: 12px;
+    }
+    h1 {
+      margin: 0;
+      font-size: 25px;
+      letter-spacing: -0.02em;
+    }
+    p {
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.5;
+    }
+    form {
+      margin-top: 6px;
+      display: grid;
+      gap: 12px;
+    }
+    label {
+      display: grid;
+      gap: 6px;
+      font-size: 13px;
+      color: var(--muted);
+    }
+    input {
+      width: 100%;
+      min-height: 44px;
+      border: 1px solid #d7d2c7;
+      border-radius: 12px;
+      padding: 0 12px;
+      font: inherit;
+      color: var(--ink);
+      background: #fcfbf9;
+    }
+    .actions {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .back-link {
+      min-height: 42px;
+      display: inline-flex;
+      align-items: center;
+      padding: 0 12px;
+      border: 1px solid #d7d2c7;
+      border-radius: 12px;
+      text-decoration: none;
+      color: var(--ink);
+      background: #fcfbf9;
+      font-size: 13px;
+      font-weight: 600;
+    }
+    button {
+      min-height: 44px;
+      border: 1px solid var(--primary);
+      border-radius: 12px;
+      background: var(--primary);
+      color: #fff;
+      font: inherit;
+      font-weight: 600;
+      padding: 0 16px;
+      cursor: pointer;
+    }
+    .note {
+      font-size: 12px;
+    }
+    .error {
+      min-height: 20px;
+      font-size: 13px;
+      color: #a03030;
+    }
+    .success {
+      min-height: 20px;
+      font-size: 13px;
+      color: #2f7a48;
+    }
+  </style>
+</head>
+<body>
+  <main class="card">
+    <h1>Paramètres</h1>
+    <p>Modifie ici ton cookie <code>remember-me</code>. La clé <code>OPENAI_API_KEY</code> est optionnelle.</p>
+    <form id="settingsForm">
+      <label for="rememberMe">Cookie remember-me (Malt)</label>
+      <input id="rememberMe" name="rememberMe" autocomplete="off" required>
+      <label for="openaiApiKey">Clé OPENAI_API_KEY</label>
+      <input id="openaiApiKey" name="openaiApiKey" autocomplete="off">
+      <div class="actions">
+        <a class="back-link" href="/">Retour au dashboard</a>
+        <button type="submit">Enregistrer</button>
+      </div>
+      <div class="error" id="formError"></div>
+      <div class="success" id="formSuccess"></div>
+    </form>
+    <p class="note">Les données restent locales dans <code>.env</code>.</p>
+  </main>
+
+  <script>
+    const form = document.getElementById("settingsForm");
+    const errorNode = document.getElementById("formError");
+    const successNode = document.getElementById("formSuccess");
+
+    async function fetchJson(url, options) {
+      const response = await fetch(url, options);
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(payload.error || "Requête impossible.");
+      }
+      return payload;
+    }
+
+    async function loadSettings() {
+      const payload = await fetchJson("/api/settings");
+      document.getElementById("rememberMe").value = payload.remember_me || "";
+      document.getElementById("openaiApiKey").placeholder = payload.has_openai_api_key
+        ? "déjà configurée (tu peux la remplacer)"
+        : "sk-...";
+    }
+
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      errorNode.textContent = "";
+      successNode.textContent = "";
+      const rememberMe = document.getElementById("rememberMe").value.trim();
+      const openaiApiKey = document.getElementById("openaiApiKey").value.trim();
+      if (!rememberMe) {
+        errorNode.textContent = "Le cookie remember-me est obligatoire.";
+        return;
+      }
+      try {
+        await fetchJson("/api/settings", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            remember_me: rememberMe,
+            openai_api_key: openaiApiKey,
+          }),
+        });
+        document.getElementById("openaiApiKey").value = "";
+        document.getElementById("openaiApiKey").placeholder = "clé enregistrée";
+        successNode.textContent = "Paramètres enregistrés.";
+      } catch (error) {
+        errorNode.textContent = error.message || "Erreur inconnue.";
+      }
+    });
+
+    loadSettings().catch((error) => {
+      errorNode.textContent = error.message || "Impossible de charger les paramètres.";
+    });
+  </script>
+</body>
+</html>

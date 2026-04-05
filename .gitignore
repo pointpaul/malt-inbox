@@ -1,0 +1,16 @@
+.env
+.venv/
+.local/
+.ruff_cache/
+.pytest_cache/
+__pycache__/
+*.pyc
+*.log
+*.sqlite3
+*.egg-info/
+.DS_Store
+cookies.chrome.json
+test-results/
+.coverage
+coverage.xml
+htmlcov/

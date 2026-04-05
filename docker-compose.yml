@@ -1,0 +1,12 @@
+# Optionnel — usage principal : uv run python main.py (voir README).
+services:
+  app:
+    build: .
+    ports:
+      - "8765:8765"
+    environment:
+      - MALT_CRM_HOST=0.0.0.0
+      - MALT_CRM_PUBLIC_HOST=127.0.0.1
+    volumes:
+      - ./.local:/app/.local
+      - ./.env:/app/.env
