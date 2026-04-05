@@ -567,6 +567,7 @@ def update_conversation_crm(
     manual_next_action: str | None = None,
     archived: bool | None = None,
     reminder_due_at: datetime | None | _ReminderUnset = REMINDER_UNCHANGED,
+    bump_updated_at: bool = False,
 ) -> ConversationRecord | None:
     """Update CRM fields for one conversation."""
 
@@ -610,6 +611,8 @@ def update_conversation_crm(
 
     if reminder_due_at is not REMINDER_UNCHANGED:
         record.reminder_due_at = reminder_due_at
+    if bump_updated_at:
+        record.updated_at = datetime.now(tz=timezone.utc)
 
     session.commit()
     session.refresh(record)

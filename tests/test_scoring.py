@@ -17,7 +17,7 @@ def test_smart_tier_hot_when_must_reply() -> None:
     assert t["id"] == "hot"
 
 
-def test_smart_tier_follow_when_waiting() -> None:
+def test_smart_tier_waiting_client_when_attente_not_due() -> None:
     t = conversation_smart_tier(
         effective_workflow=AIWorkflowStatus.ATTENTE_REPONSE.value,
         ai_urgency="low",
@@ -25,6 +25,19 @@ def test_smart_tier_follow_when_waiting() -> None:
         ai_needs_reply=False,
         priority="low",
         follow_up_due=False,
+        max_linked_budget=None,
+    )
+    assert t["id"] == "waiting_client"
+
+
+def test_smart_tier_follow_when_attente_and_follow_up_due() -> None:
+    t = conversation_smart_tier(
+        effective_workflow=AIWorkflowStatus.ATTENTE_REPONSE.value,
+        ai_urgency="low",
+        ai_category="spam",
+        ai_needs_reply=False,
+        priority="low",
+        follow_up_due=True,
         max_linked_budget=None,
     )
     assert t["id"] == "follow_up"

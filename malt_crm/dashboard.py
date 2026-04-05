@@ -1024,6 +1024,7 @@ class DashboardApp:
                     manual_workflow_status=AIWorkflowStatus.ATTENTE_REPONSE,
                     manual_next_action="En attente de réponse client.",
                     reminder_due_at=None,
+                    bump_updated_at=True,
                 )
         elif action == "snooze_3d":
             due = _utcnow() + timedelta(days=3)

@@ -453,6 +453,12 @@
       border-color: #c5e3cf;
     }
 
+    .row-tier-compact.tier-waiting_client {
+      background: #e8f0fa;
+      color: #2a4a7a;
+      border-color: #c5d8f0;
+    }
+
     .row-score-compact {
       font-size: 11px;
       font-weight: 600;
@@ -601,6 +607,12 @@
       background: #e8f4ec;
       color: #2f5c3e;
       border-color: #c5e3cf;
+    }
+
+    .badge.tier.waiting_client {
+      background: #e8f0fa;
+      color: #2a4a7a;
+      border-color: #c5d8f0;
     }
 
     .badge.strength-score {

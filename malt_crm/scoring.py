@@ -71,8 +71,17 @@ def conversation_smart_tier(
             "hint": "Réponse ou relance prioritaire",
         }
 
+    # Attente client « normale » (pas encore en fenêtre de relance automatique).
+    if wf == AIWorkflowStatus.ATTENTE_REPONSE.value and not follow_up_due:
+        return {
+            "id": "waiting_client",
+            "emoji": "🔵",
+            "label": "Attente réponse client",
+            "hint": "Dernier envoi effectué ; le prochain pas est côté client.",
+        }
+
     follow = False
-    if wf == AIWorkflowStatus.ATTENTE_REPONSE.value:
+    if wf == AIWorkflowStatus.ATTENTE_REPONSE.value and follow_up_due:
         follow = True
     elif follow_up_due:
         follow = True

@@ -105,10 +105,11 @@
     }
 
     function smartTierRank(tier) {
-      if (!tier || !tier.id) return 2;
+      if (!tier || !tier.id) return 3;
       if (tier.id === "hot") return 0;
       if (tier.id === "follow_up") return 1;
-      return 2;
+      if (tier.id === "waiting_client") return 2;
+      return 3;
     }
 
     function feedItemTierRank(item) {
